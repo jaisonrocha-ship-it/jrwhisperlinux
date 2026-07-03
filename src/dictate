@@ -32,7 +32,7 @@ gi.require_version('Pango', '1.0')
 import signal, subprocess, json, time, tempfile, threading, fcntl, wave, socket, cairo, math, re
 from collections import deque
 import numpy as np
-from gi.repository import Gtk, Gdk, GLib, Pango
+from gi.repository import Gtk, Gdk, GLib, Pango, GdkPixbuf
 
 
 CONFIG_DIR = os.path.expanduser("~/.config/dictate")
@@ -1356,29 +1356,57 @@ class SettingsWindow(Gtk.Window):
         self.config = config
         self.original_config = dict(config)
 
+        # SVG Icon (Microfone discreto e profissional)
+        svg_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#64DCFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+          <line x1="9" y1="22" x2="15" y2="22"/>
+        </svg>"""
+
+        pixbuf = None
+        try:
+            loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
+            loader.set_size(32, 32)
+            loader.write(svg_icon.encode('utf-8'))
+            loader.close()
+            pixbuf = loader.get_pixbuf()
+            self.set_icon(pixbuf)
+        except Exception as e:
+            _debug_log(f"Falha ao carregar ícone SVG da janela: {e}")
+
         self.apply_premium_css()
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.add(main_box)
 
-        # Header/Title Bar
-        header = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        # Header/Title Bar (Layout horizontal com ícone + textos)
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         header.set_name("settings-header")
         header.set_margin_top(16)
         header.set_margin_bottom(16)
         header.set_margin_start(20)
         header.set_margin_end(20)
 
+        if pixbuf:
+            img_icon = Gtk.Image.new_from_pixbuf(pixbuf)
+            img_icon.set_valign(Gtk.Align.CENTER)
+            header.pack_start(img_icon, False, False, 0)
+
+        # Caixa vertical de textos
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
         title_label = Gtk.Label()
         title_label.set_markup("<span size='large' weight='bold' foreground='#FFFFFF'>Configurações do Dictate</span>")
         title_label.set_halign(Gtk.Align.START)
-        header.pack_start(title_label, False, False, 0)
+        text_box.pack_start(title_label, False, False, 0)
 
         subtitle_label = Gtk.Label()
         subtitle_label.set_markup("<span size='small' foreground='#FFFFFF80'>Ajuste as preferências de captação, modelo e formatação inteligente.</span>")
         subtitle_label.set_halign(Gtk.Align.START)
-        header.pack_start(subtitle_label, False, False, 0)
+        text_box.pack_start(subtitle_label, False, False, 0)
 
+        header.pack_start(text_box, True, True, 0)
         main_box.pack_start(header, False, False, 0)
 
         # Content Box
