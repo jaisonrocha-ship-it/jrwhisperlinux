@@ -530,9 +530,6 @@ class WhisperFlowOverlay(Gtk.Window):
         )
 
 
-        # Usando Gtk.Overlay para sobrepor o ícone no topo direito discretamente
-        overlay_container = Gtk.Overlay()
-
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.main_box.set_margin_top(16)
         self.main_box.set_margin_bottom(16)
@@ -543,10 +540,36 @@ class WhisperFlowOverlay(Gtk.Window):
         self.waveform = SiriWaveform()
         self.main_box.pack_start(self.waveform, False, False, 0)
 
-        self.status_label = Gtk.Label(label="🎤 Iniciando...")
+        # Linha horizontal de status contendo label na esquerda e ícone discreto na direita
+        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        status_box.set_hexpand(True)
+
+        self.status_label = Gtk.Label(label="Iniciando...")
         self.status_label.get_style_context().add_class('status-label')
         self.status_label.set_halign(Gtk.Align.START)
-        self.main_box.pack_start(self.status_label, False, False, 0)
+        status_box.pack_start(self.status_label, False, False, 0)
+
+        # SVG do ícone discreto de microfone (opacidade 0.35 para ser bem discreto)
+        svg_overlay_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.35">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+        </svg>"""
+
+        try:
+            loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
+            loader.set_size(14, 14)
+            loader.write(svg_overlay_icon.encode('utf-8'))
+            loader.close()
+            pixbuf_overlay = loader.get_pixbuf()
+            img_icon = Gtk.Image.new_from_pixbuf(pixbuf_overlay)
+            img_icon.set_halign(Gtk.Align.END)
+            img_icon.set_valign(Gtk.Align.CENTER)
+            status_box.pack_end(img_icon, False, False, 0)
+        except Exception as e:
+            _debug_log(f"Falha ao carregar ícone SVG do overlay: {e}")
+
+        self.main_box.pack_start(status_box, False, False, 0)
 
         self.text_label = Gtk.Label(label="")
         self.text_label.get_style_context().add_class('text-display')
@@ -556,31 +579,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.text_label.set_use_markup(True)
         self.main_box.pack_start(self.text_label, True, True, 0)
 
-        overlay_container.add(self.main_box)
-
-        # SVG do ícone discreto de microfone (opacidade 0.35 para ser bem discreto)
-        svg_overlay_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.35">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
-          <line x1="12" y1="18" x2="12" y2="22"/>
-        </svg>"""
-
-        try:
-            loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
-            loader.set_size(18, 18)
-            loader.write(svg_overlay_icon.encode('utf-8'))
-            loader.close()
-            pixbuf_overlay = loader.get_pixbuf()
-            img_icon = Gtk.Image.new_from_pixbuf(pixbuf_overlay)
-            img_icon.set_halign(Gtk.Align.END)
-            img_icon.set_valign(Gtk.Align.START)
-            img_icon.set_margin_top(14)
-            img_icon.set_margin_end(14)
-            overlay_container.add_overlay(img_icon)
-        except Exception as e:
-            _debug_log(f"Falha ao carregar ícone SVG do overlay: {e}")
-
-        self.add(overlay_container)
+        self.add(self.main_box)
         self._final_text = ""
         
 
@@ -1205,7 +1204,7 @@ class DictateThread(threading.Thread):
             capture.start()
 
 
-            GLib.idle_add(self.overlay.update_status, "🎤 Calibrando...", "status-calibrating")
+            GLib.idle_add(self.overlay.update_status, "Calibrando...", "status-calibrating")
             if threshold == 0:
                 threshold = calibrate_threshold(capture, self.config)
             else:
@@ -1217,7 +1216,7 @@ class DictateThread(threading.Thread):
 
             capture.get_audio_float32()
 
-            GLib.idle_add(self.overlay.update_status, "🎤 Aguardando voz...", "status-waiting")
+            GLib.idle_add(self.overlay.update_status, "Aguardando voz...", "status-waiting")
 
             recording_start = time.time()
             started = False
@@ -1244,7 +1243,7 @@ class DictateThread(threading.Thread):
                     if not started and speech_confirm_ticks >= SPEECH_START_TICKS:
 
                         started = True
-                        GLib.idle_add(self.overlay.update_status, "🎤 Ouvindo...", "status-listening")
+                        GLib.idle_add(self.overlay.update_status, "Ouvindo...", "status-listening")
 
 
                         if not pre_buffer_captured:
@@ -1312,7 +1311,7 @@ class DictateThread(threading.Thread):
 
             if started and len(all_audio) > sr * 0.3:
                 duration = len(all_audio) / sr
-                GLib.idle_add(self.overlay.update_status, "✨ Transcrevendo...", "status-transcribing")
+                GLib.idle_add(self.overlay.update_status, "Transcrevendo...", "status-transcribing")
                 _debug_log(f"Áudio capturado: {duration:.1f}s, {len(all_audio)} samples")
 
 
@@ -1340,16 +1339,16 @@ class DictateThread(threading.Thread):
 
                     self._paste_text(final_text, active_win)
 
-                    GLib.idle_add(self.overlay.update_status, "✅ Texto colado!", "status-success")
+                    GLib.idle_add(self.overlay.update_status, "Texto colado!", "status-success")
                 else:
                     audio_rms = float(np.sqrt(np.mean(all_audio**2)))
                     _debug_log(f"Nenhuma fala reconhecida (RMS={audio_rms:.4f})")
                     GLib.idle_add(self.overlay.update_status,
-                        "❌ Nenhuma fala detectada", "status-error")
+                        "Nenhuma fala detectada", "status-error")
             else:
                 msg = "Nenhuma fala detectada" if not started else "Áudio muito curto"
                 _debug_log(msg)
-                GLib.idle_add(self.overlay.update_status, f"❌ {msg}", "status-error")
+                GLib.idle_add(self.overlay.update_status, msg, "status-error")
 
             time.sleep(1.5)
             GLib.idle_add(self._cleanup_gtk)
@@ -1362,7 +1361,7 @@ class DictateThread(threading.Thread):
             except OSError:
                 pass
             _debug_log(f"ERRO: {e}")
-            GLib.idle_add(self.overlay.update_status, "⚠️ Algo deu errado. Tente novamente.", "status-error")
+            GLib.idle_add(self.overlay.update_status, "Erro na captação. Tente novamente.", "status-error")
             time.sleep(2)
             GLib.idle_add(self._cleanup_gtk)
         finally:
