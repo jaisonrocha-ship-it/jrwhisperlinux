@@ -1325,6 +1325,9 @@ class DictateThread(threading.Thread):
             self.recording_active = False
             capture.stop()
 
+            if self.cancelled:
+                _debug_log("DictateThread cancelada pelo usuário (configurações abertas). Abortando.")
+                return
 
             final_audio = capture.get_audio_float32()
             if len(final_audio) > 0:
@@ -1476,10 +1479,10 @@ class SettingsWindow(Gtk.Window):
         content_box.pack_start(separator, False, False, 0)
 
         # Pack Pages
-        self.stack.pack_start(self.create_recognition_page(), "recognition", "Reconhecimento")
-        self.stack.pack_start(self.create_audio_page(), "audio", "Áudio & Captação")
-        self.stack.pack_start(self.create_formatting_page(), "formatting", "Formatação")
-        self.stack.pack_start(self.create_overrides_page(), "overrides", "Dicionário")
+        self.stack.add_titled(self.create_recognition_page(), "recognition", "Reconhecimento")
+        self.stack.add_titled(self.create_audio_page(), "audio", "Áudio & Captação")
+        self.stack.add_titled(self.create_formatting_page(), "formatting", "Formatação")
+        self.stack.add_titled(self.create_overrides_page(), "overrides", "Dicionário")
 
         content_box.pack_start(self.stack, True, True, 0)
 
