@@ -1,0 +1,1574 @@
+#!/usr/bin/env python3
+"""
+WhisperFlow para Linux — Ditado por voz com overlay visual e transcrição instantânea
+faster-whisper + CUDA/CPU + GTK3 overlay
+
+USO: Super+Shift+V → overlay aparece, fale, resultado é colado automaticamente
+
+v3.1 — 2026-07-03
+  • Interface de 3 linhas deslizantes com fading de opacidade (Pango markup) e altura estática.
+  • Suporte híbrido Wayland e X11 (wl-copy, wtype, xclip, xdotool).
+  • Isolamento de voz neural integrado com RNNoise via FFmpeg (nice -n 19).
+  • Detecção multi-monitor dinâmica baseado na posição do mouse.
+  • Daemon Mode com latência zero e tempo de silêncio otimizado para 1.7s.
+"""
+
+import sys, os
+
+VENV_PYTHON = os.path.expanduser("~/.local/share/dictation-venv/bin/python3")
+if sys.executable != VENV_PYTHON and os.path.exists(VENV_PYTHON):
+    os.execv(VENV_PYTHON, [VENV_PYTHON, __file__] + sys.argv[1:])
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Pango', '1.0')
+
+import signal, subprocess, json, time, tempfile, threading, fcntl, wave, socket, cairo, math, re
+from collections import deque
+import numpy as np
+from gi.repository import Gtk, Gdk, GLib, Pango
+
+# ── Config ──
+CONFIG_DIR = os.path.expanduser("~/.config/dictate")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+PID_FILE = "/tmp/dictate.pid"
+DAEMON_SOCKET = "/tmp/dictate_daemon.sock"
+DAEMON_PID_FILE = "/tmp/dictate_daemon.pid"
+DEBUG_LOG = "/tmp/dictate_debug.log"
+ERROR_LOG = "/tmp/dictate_error.log"
+LAST_WAV = "/tmp/dictate_last.wav"
+
+# Caminhos conhecidos de libcublas.so.12 (auto-detect)
+CUBLAS_SEARCH_PATHS = [
+    "/opt/resolve/libs",                    # DaVinci Resolve
+    "/usr/local/cuda-12/lib64",             # CUDA 12 toolkit
+    "/usr/local/cuda/lib64",                # CUDA generic
+]
+
+DEFAULT_CONFIG = {
+    "model": "medium",          # medium (rápido+bom) ou large-v3 (preciso+lento)
+    "language": "pt",
+    "sample_rate": 16000,
+    "mic_device": "@DEFAULT_SOURCE@",
+    "silence_threshold": 0,     # 0 = auto-calibrar
+    "silence_duration": 1.7,    # segundos de silêncio para parar
+    "listen_timeout": 15,       # segundos sem fala antes de cancelar
+    "max_duration": 60,         # duração máxima de gravação
+    "gpu_min_vram_mb": 2500,    # VRAM mínima livre pra usar GPU
+    "initial_prompt": (
+        "Termos portuários e de comércio exterior: "
+        "Incoterms, FOB, CIF, CFR, DAP, chartering, "
+        "breakbulk, M2A Metais, ArcelorMittal, TESC, "
+        "reefer, contêiner refrigerado, Inova MM, "
+        "despachante aduaneiro, estufagem, desova, "
+        "navio, porto, terminal, armador, frete, "
+        "conhecimento de embarque, BL, booking"
+    ),
+    "no_speech_threshold": 0.6,
+    "log_prob_threshold": -1.0,
+    "compression_ratio_threshold": 2.4,
+    "enable_formatting": True,
+    "remove_fillers": True,
+    "voice_commands": True,
+    "audio_ducking": True,
+    "ducking_volume": 0.20,
+    "noise_suppression": True,
+    "word_overrides": {
+        "m2a metais": "M2A Metais",
+        "arcelormittal": "ArcelorMittal",
+        "tesc": "TESC",
+        "brutaldev": "brutaldev",
+        "bl": "B/L",
+        "booking": "Booking",
+        "incoterms": "Incoterms"
+    }
+}
+
+# ── Silence detection constants ──
+TICK_INTERVAL = 0.05            # 50ms entre checks
+SPEECH_START_TICKS = 3          # 150ms de fala consecutiva para iniciar gravação
+CALIBRATION_WAIT_TIMEOUT = 5.0  # máximo para esperar parec iniciar
+CALIBRATION_MEASURE_SECS = 1.0  # duração da medição de ruído
+PRE_BUFFER_SECS = 0.3           # 300ms de áudio antes da fala
+
+# ── Cores (Design System Desklets brutaldev) ──
+# Cor de fundo do overlay (usada também no waveform para manter consistência)
+OVERLAY_BG = (10/255, 10/255, 12/255, 0.62)
+
+CSS = """
+.overlay {
+    background-color: rgba(10, 10, 12, 0.62);
+    border: none;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
+                inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+}
+.status-label {
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 10px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+}
+.status-calibrating {
+    color: rgba(255, 200, 60, 0.8);
+}
+.status-waiting {
+    color: rgba(255, 255, 255, 0.65);
+}
+.status-listening {
+    color: rgba(100, 220, 255, 0.9);
+}
+.status-transcribing {
+    color: rgba(200, 170, 255, 0.9);
+}
+.status-success {
+    color: rgba(100, 255, 160, 0.9);
+}
+.status-error {
+    color: rgba(255, 120, 100, 0.85);
+}
+.text-display {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 13.5px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 400;
+}
+.partial-text {
+    color: rgba(255, 255, 255, 0.6);
+    font-style: italic;
+}
+.final-text {
+    color: #FFFFFF;
+    font-weight: 600;
+}
+"""
+
+
+def load_config():
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE) as f:
+            return {**DEFAULT_CONFIG, **json.load(f)}
+    return dict(DEFAULT_CONFIG)
+
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+
+
+def _debug_log(msg):
+    """Append debug info to log file."""
+    try:
+        with open(DEBUG_LOG, "a") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass
+
+
+# ═══════════════════════════════════════════════════════
+#  GPU DETECTION
+# ═══════════════════════════════════════════════════════
+
+def get_free_vram_mb():
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            timeout=3
+        ).decode().strip()
+        return max(int(x) for x in out.split('\n') if x.strip())
+    except Exception:
+        return 0
+
+
+def _find_cublas_path():
+    """Procura libcublas.so.12 em caminhos conhecidos."""
+    for path in CUBLAS_SEARCH_PATHS:
+        if os.path.isfile(os.path.join(path, "libcublas.so.12")):
+            return path
+    return None
+
+
+_cublas_preloaded = False
+
+
+def _preload_cublas():
+    """Pré-carrega libcublas.so.12 e libcublasLt.so.12 via ctypes.
+    
+    Setar LD_LIBRARY_PATH depois que o processo já iniciou não funciona —
+    o linker dinâmico não relê a variável. ctypes.cdll.LoadLibrary() é
+    a forma correta de disponibilizar libs para módulos carregados depois.
+    """
+    global _cublas_preloaded
+    if _cublas_preloaded:
+        return True
+    
+    import ctypes
+    cublas_path = _find_cublas_path()
+    if not cublas_path:
+        return False
+    
+    try:
+        ctypes.cdll.LoadLibrary(os.path.join(cublas_path, "libcublas.so.12"))
+        ctypes.cdll.LoadLibrary(os.path.join(cublas_path, "libcublasLt.so.12"))
+        _cublas_preloaded = True
+        _debug_log(f"cuBLAS preloaded from {cublas_path}")
+        return True
+    except OSError as e:
+        _debug_log(f"cuBLAS preload falhou: {e}")
+        return False
+
+
+def choose_device(config):
+    """Decide CUDA vs CPU baseado na VRAM livre e disponibilidade de cublas."""
+    min_vram = config.get("gpu_min_vram_mb", 2500)
+    free = get_free_vram_mb()
+
+    if free >= min_vram:
+        if _preload_cublas():
+            _debug_log(f"GPU: VRAM={free}MB, cublas preloaded")
+            return "cuda", "int8_float16"
+        else:
+            _debug_log(f"GPU: VRAM={free}MB mas cublas.so.12 não encontrado, usando CPU")
+
+    _debug_log(f"CPU: VRAM={free}MB (min={min_vram}MB)")
+    return "cpu", "int8"
+
+
+def get_current_volume():
+    """Retorna o volume atual e se está mutado usando WirePlumber (wpctl)."""
+    try:
+        out = subprocess.check_output(
+            ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
+            timeout=1, stderr=subprocess.DEVNULL
+        ).decode().strip()
+        # Formato esperado: "Volume: 0.90" ou "Volume: 0.90 [MUTED]"
+        parts = out.split()
+        if len(parts) >= 2:
+            return float(parts[1]), "[MUTED]" in out
+    except Exception as e:
+        _debug_log(f"Falha ao ler volume: {e}")
+    return None, False
+
+
+def set_volume(val):
+    """Define o volume de áudio padrão do sistema via WirePlumber."""
+    try:
+        subprocess.run(
+            ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{val:.2f}"],
+            timeout=1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    except Exception as e:
+        _debug_log(f"Falha ao definir volume: {e}")
+
+
+# ═══════════════════════════════════════════════════════
+#  AUDIO CAPTURE (via parec)
+# ═══════════════════════════════════════════════════════
+
+class AudioCapture:
+    """Captura áudio via parec com buffer thread-safe e pré-buffer."""
+
+    def __init__(self, mic, sr=16000, pre_buffer_secs=PRE_BUFFER_SECS):
+        self.sr = sr
+        self.buffer = bytearray()
+        self.running = False
+        self.proc = None
+        self.mic = mic
+        self._lock = threading.Lock()
+        self.current_rms = 0.0
+        self._has_data = threading.Event()
+
+        # Pré-buffer: ring buffer dos últimos N ms de áudio (para não perder início da fala)
+        pre_buffer_bytes = int(pre_buffer_secs * sr * 2)  # 2 bytes por sample (s16le)
+        self._pre_buffer = deque(maxlen=pre_buffer_bytes // 1024 + 1)  # chunks de 1024 bytes
+
+    def start(self):
+        self.running = True
+        self.proc = subprocess.Popen(
+            ["parec", "--device", self.mic, "--format=s16le",
+             "--rate", str(self.sr), "--channels=1", "--latency-msec=30"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+
+    def _read_loop(self):
+        try:
+            count = 0
+            while self.running:
+                chunk = self.proc.stdout.read(1024)
+                if not chunk:
+                    _debug_log("AudioCapture: parec stdout EOF")
+                    break
+                count += 1
+                self._has_data.set()
+                with self._lock:
+                    self.buffer.extend(chunk)
+                    self._pre_buffer.append(bytes(chunk))
+                # RMS instantâneo do chunk (sem smoothing — AGENTS.md rule)
+                samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+                rms = float(np.sqrt(np.mean(samples ** 2)))
+                self.current_rms = rms
+                if count % 10 == 0 or count < 5:
+                    _debug_log(f"AudioCapture: read chunk #{count}, RMS={rms:.6f}")
+        except Exception as e:
+            import traceback
+            _debug_log(f"AudioCapture Thread CRASHED: {e}")
+            try:
+                with open(ERROR_LOG, "a") as f:
+                    f.write(f"--- AudioCapture Crash ---\n")
+                    traceback.print_exc(file=f)
+            except OSError:
+                pass
+
+    def wait_for_data(self, timeout=CALIBRATION_WAIT_TIMEOUT):
+        """Bloqueia até parec produzir dados reais. Retorna True se dados chegaram."""
+        return self._has_data.wait(timeout=timeout)
+
+    def get_audio_float32(self):
+        with self._lock:
+            data = bytes(self.buffer)
+            self.buffer.clear()
+        if not data:
+            return np.array([], dtype=np.float32)
+        if len(data) % 2 != 0:
+            data = data[:-1]
+        if not data:
+            return np.array([], dtype=np.float32)
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        return samples
+
+    def get_pre_buffer_float32(self):
+        """Retorna o conteúdo do pré-buffer como float32 (para incluir no início da gravação)."""
+        with self._lock:
+            data = b''.join(self._pre_buffer)
+        if not data:
+            return np.array([], dtype=np.float32)
+        if len(data) % 2 != 0:
+            data = data[:-1]
+        if not data:
+            return np.array([], dtype=np.float32)
+        return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+    def get_rms(self):
+        return self.current_rms
+
+    def has_data(self):
+        with self._lock:
+            return len(self.buffer) > 0
+
+    def stop(self):
+        self.running = False
+        if self.proc:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+
+
+# ═══════════════════════════════════════════════════════
+#  WIDGET ONDA SENOIDAL ESTILO SIRI (Cairo drawing)
+# ═══════════════════════════════════════════════════════
+
+class SiriWaveform(Gtk.DrawingArea):
+    def __init__(self):
+        super().__init__()
+        self.set_size_request(410, 42)
+        self.phase = 0.0
+        self.amplitude = 0.02
+        self.target_amplitude = 0.02
+        self.set_margin_bottom(10)
+        
+        # Conecta sinal de desenho
+        self.connect("draw", self.on_draw)
+        
+        # Loop de animação a ~60 FPS (16ms)
+        GLib.timeout_add(16, self._tick)
+
+    def _tick(self):
+        self.phase += 0.15
+        # Interpolação linear suave (lerp) para evitar pulsações bruscas
+        self.amplitude = self.amplitude * 0.82 + self.target_amplitude * 0.18
+        self.queue_draw()
+        return True
+
+    def set_rms(self, rms, threshold):
+        # Mapeia a amplitude alvo baseado no RMS vs threshold
+        max_possible = max(threshold * 4, 0.01)
+        val = min(rms / max_possible, 1.0)
+        # Mantém pulsação mínima em silêncio (aparência de vida)
+        self.target_amplitude = max(val * 0.9, 0.04)
+
+    def on_draw(self, widget, cr):
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        mid_y = height / 2.0
+        
+        # Pinta o fundo com a mesma cor do overlay (evita buraco de transparência)
+        cr.set_source_rgba(*OVERLAY_BG)
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        
+        # 3 ondas senoidais sobrepostas com parâmetros, opacidades e cores distintos
+        # Cada onda possui seu próprio gradiente dinâmico baseado na fase atual
+        waves = [
+            # (frequência, fase_offset, amplitude_multiplier, opacidade, largura_linha, tipo_gradiente)
+            (0.012, 0.0, 1.0, 0.85, 2.5, "main"),       # Onda principal forte (Royal Blue -> Violet -> Pink)
+            (0.022, 1.8, 0.6, 0.45, 1.5, "electric"),   # Onda média rápida (Electric Cyan -> Teal -> Violet)
+            (0.008, -1.5, 0.35, 0.20, 1.0, "warm")       # Onda lenta de fundo (Magenta -> Orange -> Red)
+        ]
+        
+        for freq, phase_offset, amp_mult, opacity, line_w, grad_type in waves:
+            # Gradiente linear horizontal contendo cores Siri que oscilam sutilmente com a fase
+            gradient = cairo.LinearGradient(0, 0, width, 0)
+            
+            if grad_type == "main":
+                # Gradiente Principal: Royal Blue -> Shifting Violet -> Pink/Magenta
+                shift = 0.05 * math.sin(self.phase * 0.3)
+                gradient.add_color_stop_rgba(0.0, 0.0, 0.48, 1.0, opacity)
+                gradient.add_color_stop_rgba(0.5 + shift, 0.69, 0.32, 0.87, opacity)
+                gradient.add_color_stop_rgba(1.0, 1.0, 0.18, 0.33, opacity)
+            elif grad_type == "electric":
+                # Gradiente Elétrico: Electric Cyan -> Dynamic Teal -> Bright Purple
+                shift = 0.07 * math.cos(self.phase * 0.4)
+                gradient.add_color_stop_rgba(0.0, 0.0, 0.95, 1.0, opacity)
+                gradient.add_color_stop_rgba(0.4 + shift, 0.0, 0.72, 0.92, opacity)
+                gradient.add_color_stop_rgba(1.0, 0.48, 0.22, 0.95, opacity)
+            else:
+                # Gradiente Quente: Deep Purple -> Hot Pink -> Neon Orange/Red
+                shift = 0.04 * math.sin(self.phase * 0.2)
+                gradient.add_color_stop_rgba(0.0, 0.60, 0.12, 0.85, opacity)
+                gradient.add_color_stop_rgba(0.6 + shift, 0.95, 0.15, 0.42, opacity)
+                gradient.add_color_stop_rgba(1.0, 1.0, 0.38, 0.10, opacity)
+            
+            cr.set_source(gradient)
+            cr.set_line_width(line_w)
+            
+            cr.new_path()
+            first = True
+            
+            for x in range(0, width + 4, 4):
+                # Envelope senoidal para atenuar as bordas nas extremidades esquerda e direita
+                envelope = math.sin((x / width) * math.pi)
+                
+                y = mid_y + (self.amplitude * (height * 0.45) * amp_mult * envelope * 
+                             math.sin(x * freq + self.phase + phase_offset))
+                
+                if first:
+                    cr.move_to(x, y)
+                    first = False
+                else:
+                    cr.line_to(x, y)
+
+            
+            cr.stroke()
+
+
+# ═══════════════════════════════════════════════════════
+#  GTK3 OVERLAY (estilo WhisperFlow)
+# ═══════════════════════════════════════════════════════
+
+class WhisperFlowOverlay(Gtk.Window):
+    def __init__(self):
+        Gtk.Window.__init__(self, type=Gtk.WindowType.POPUP)
+
+        self.set_title("Dictate")
+        self.set_keep_above(True)
+        self.set_decorated(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_accept_focus(False)
+        self.set_opacity(0.0) # Começa invisível para o fade-in
+
+        # Suporte a canal alpha (transparência real nos cantos arredondados)
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            self.set_visual(visual)
+        self.set_app_paintable(True)
+
+        # Conecta sinal para limpar o fundo da janela pop-up e torná-la transparente
+        # Isso remove de vez as bordas e cantos pretos no Cinnamon
+        self.connect("draw", self.on_window_draw)
+
+        # Tamanho dinâmico (largura de 450px, altura adaptável ao conteúdo)
+        self.set_default_size(450, -1)
+        self.set_size_request(450, -1)
+
+        display = screen.get_display()
+        # Posiciona o overlay no monitor onde o cursor do mouse está
+        try:
+            seat = display.get_default_seat()
+            pointer = seat.get_pointer()
+            _, x, y = pointer.get_position()
+            monitor = display.get_monitor_at_point(x, y)
+        except Exception:
+            monitor = display.get_primary_monitor()
+            
+        geo = monitor.get_geometry()
+        # Posiciona um pouco mais para cima para acomodar expansões de texto longo
+        self.move(
+            geo.x + (geo.width - 450) // 2,
+            geo.y + geo.height - 310
+        )
+
+        # CSS
+        style_provider = Gtk.CssProvider()
+        style_provider.load_from_data(CSS.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, style_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+        # Container principal
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.main_box.set_margin_top(16)
+        self.main_box.set_margin_bottom(16)
+        self.main_box.set_margin_start(18)
+        self.main_box.set_margin_end(18)
+        self.main_box.get_style_context().add_class('overlay')
+
+        # Onda Siri dinâmica
+        self.waveform = SiriWaveform()
+        self.main_box.pack_start(self.waveform, False, False, 0)
+
+        # Status
+        self.status_label = Gtk.Label(label="🎤 Iniciando...")
+        self.status_label.get_style_context().add_class('status-label')
+        self.status_label.set_halign(Gtk.Align.START)
+        self.main_box.pack_start(self.status_label, False, False, 0)
+
+        # Texto da transcrição (sem ellipsize para permitir várias linhas de texto menor)
+        self.text_label = Gtk.Label(label="")
+        self.text_label.get_style_context().add_class('text-display')
+        self.text_label.set_halign(Gtk.Align.START)
+        self.text_label.set_line_wrap(True)
+        self.text_label.set_max_width_chars(45)
+        self.text_label.set_use_markup(True)
+        self.main_box.pack_start(self.text_label, True, True, 0)
+
+        self.add(self.main_box)
+        self._final_text = ""
+        
+        # Dispara o fade-in suave
+        self.fade_in()
+
+    def on_window_draw(self, widget, cr):
+        # Limpa o fundo da janela pop-up tornando-a 100% transparente.
+        # Assim, apenas o container CSS .overlay de 12px de cantos arredondados será exibido.
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0)
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.paint()
+        return False
+
+    def fade_in(self):
+        self._fade_val = 0.0
+        
+        def _step():
+            if self._fade_val < 1.0:
+                self._fade_val += 0.10
+                self.set_opacity(min(self._fade_val, 1.0))
+                return True
+            return False
+            
+        GLib.timeout_add(14, _step)
+
+    def fade_out(self, callback):
+        self._fade_val = self.get_opacity()
+        
+        def _step():
+            if self._fade_val > 0.0:
+                self._fade_val -= 0.10
+                self.set_opacity(max(self._fade_val, 0.0))
+                return True
+            callback()
+            return False
+            
+        GLib.timeout_add(14, _step)
+
+    def update_level(self, rms, threshold):
+        """Atualiza a onda baseada no RMS."""
+        self.waveform.set_rms(rms, threshold)
+
+    def update_status(self, text, css_state=None):
+        self.status_label.set_text(text.upper())
+        ctx = self.status_label.get_style_context()
+        for cls in ['status-calibrating', 'status-waiting', 'status-listening',
+                    'status-transcribing', 'status-success', 'status-error']:
+            ctx.remove_class(cls)
+        if css_state:
+            ctx.add_class(css_state)
+
+    def update_text(self, text, final=False):
+        import html
+        lines = wrap_text_to_lines(text, max_chars=45)
+        lines_to_show = lines[-3:]
+        while len(lines_to_show) < 3:
+            lines_to_show.insert(0, "")
+            
+        markup_lines = []
+        
+        # Linha 1 (antiga) - opacidade 25% (#FFFFFF40)
+        if lines_to_show[0]:
+            escaped = html.escape(lines_to_show[0])
+            markup_lines.append(f'<span foreground="#FFFFFF40">{escaped}</span>')
+        else:
+            markup_lines.append('<span foreground="#FFFFFF00"> </span>')
+            
+        # Linha 2 (média) - opacidade 60% (#FFFFFF99)
+        if lines_to_show[1]:
+            escaped = html.escape(lines_to_show[1])
+            markup_lines.append(f'<span foreground="#FFFFFF99">{escaped}</span>')
+        else:
+            markup_lines.append('<span foreground="#FFFFFF00"> </span>')
+            
+        # Linha 3 (ativa) - opacidade 95% (#FFFFFFF2) ou branca brilhante (#FFFFFF) se final
+        if lines_to_show[2]:
+            escaped = html.escape(lines_to_show[2])
+            if not final:
+                markup_lines.append(f'<span foreground="#FFFFFFF2"><i>{escaped}</i></span>')
+            else:
+                markup_lines.append(f'<span foreground="#FFFFFF"><b>{escaped}</b></span>')
+        else:
+            markup_lines.append('<span foreground="#FFFFFF00"> </span>')
+            
+        markup_text = "\n".join(markup_lines)
+        self.text_label.set_markup(markup_text)
+        
+        if final:
+            self._final_text = text
+
+    def get_final_text(self):
+        return self._final_text
+
+
+def wrap_text_to_lines(text, max_chars=45):
+    paragraphs = text.split('\n')
+    lines = []
+    for para in paragraphs:
+        if not para:
+            lines.append("")
+            continue
+        words = para.split()
+        current_line = []
+        current_length = 0
+        for word in words:
+            addition = len(word) + (1 if current_line else 0)
+            if current_length + addition <= max_chars:
+                current_line.append(word)
+                current_length += addition
+            else:
+                if current_line:
+                    lines.append(" ".join(current_line))
+                current_line = [word]
+                current_length = len(word)
+        if current_line:
+            lines.append(" ".join(current_line))
+    return lines
+
+
+def format_transcript(text: str, config) -> str:
+    if not text:
+        return ""
+    
+    # 1. Comandos de voz (se habilitado)
+    if config.get("voice_commands", True):
+        # Substitui comandos falados por pontuações
+        # Mapeamento ordenado por tamanho decrescente do padrão regex para evitar substituições parciais
+        commands = [
+            (r"\bnovo parágrafo\b", "\n\n"),
+            (r"\bnova linha\b", "\n"),
+            (r"\bponto de interrogação\b", "?"),
+            (r"\bponto de exclamação\b", "!"),
+            (r"\bponto e vírgula\b", ";"),
+            (r"\bdois pontos\b", ":"),
+            (r"\bponto final\b", "."),
+            (r"\bvírgula\b", ","),
+        ]
+        for pattern, replacement in commands:
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+            
+    # 2. Remoção de filler words (se habilitado)
+    if config.get("remove_fillers", True):
+        # Remove vocalizações típicas sem sentido real
+        fillers_pattern = r"\b(humm|hmm|er|ahn|éh|eh|uh)\b"
+        text = re.sub(fillers_pattern, "", text, flags=re.IGNORECASE)
+        
+    # 3. Limpeza de espaçamentos órfãos e pontuações
+    text = re.sub(r' +', ' ', text)
+    # Remove espaços que ficaram antes de pontuações
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+    # Corrige espaços adjacentes a quebras de linha
+    text = re.sub(r'\n ', '\n', text)
+    text = re.sub(r' \n', '\n', text)
+    
+    # 4. Word Overrides (se houver)
+    word_overrides = config.get("word_overrides", {})
+    if word_overrides:
+        for wrong, right in word_overrides.items():
+            pattern = rf"\b{re.escape(wrong)}\b"
+            text = re.sub(pattern, right, text, flags=re.IGNORECASE)
+            
+    # 5. Capitalização e Pontuação Final
+    text = text.strip()
+    if text:
+        # Capitaliza letras após sinais de fim de frase (. ! ?) dentro da mesma linha
+        def _capitalize_after_sentence(match):
+            punc = match.group(1)
+            space = match.group(2)
+            char = match.group(3)
+            return punc + space + char.upper()
+        
+        text = re.sub(r'([.!?])(\s+)([a-zà-ú])', _capitalize_after_sentence, text)
+        
+        # Capitaliza o início de cada linha/parágrafo
+        lines = text.split('\n')
+        capitalized_lines = []
+        for line in lines:
+            if not line.strip():
+                capitalized_lines.append("")
+                continue
+            l_strip = line.strip()
+            l_cap = l_strip[0].upper() + l_strip[1:]
+            capitalized_lines.append(l_cap)
+        text = '\n'.join(capitalized_lines)
+        
+        # Garante pontuação final
+        if text and text[-1] not in ".!?;:\n":
+            text += "."
+            
+    # 6. Remove alucinações repetitivas no final (causadas por silêncio/ruído de fundo)
+    for _ in range(3):
+        # Captura frases inteiras repetidas no final (mínimo de 3 repetições consecutivas)
+        match = re.search(r'([^.!?]+[.!?]\s*)\1{2,}\s*$', text, flags=re.IGNORECASE)
+        if match:
+            repeated = match.group(1).strip()
+            # Se for uma das alucinações comuns do Whisper no silêncio, remove todas
+            if repeated.lower().rstrip('.!? ') in ["o que significa isso", "obrigado por assistir", "muito obrigado", "legenda por"]:
+                text = text[:match.start()].strip()
+            else:
+                # Caso contrário, mantém apenas uma ocorrência
+                text = text[:match.start()].strip() + " " + match.group(1).strip()
+
+    return text.strip()
+
+
+# ═══════════════════════════════════════════════════════
+#  MOTOR DE TRANSCRIÇÃO
+# ═══════════════════════════════════════════════════════
+
+class Transcriber:
+    def __init__(self, config):
+        self.config = config
+        self.model = None
+        self._device = None
+        self.use_daemon = self._check_daemon_alive()
+        if not self.use_daemon:
+            _debug_log("Daemon não detectado. Carregando modelo localmente (fallback)...")
+            self._load_model()
+        else:
+            _debug_log("Daemon detectado. Usando modo cliente.")
+
+    def _check_daemon_alive(self):
+        if not os.path.exists(DAEMON_SOCKET):
+            return False
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(0.2)  # timeout rápido de 200ms
+            s.connect(DAEMON_SOCKET)
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    def _load_model(self):
+        from faster_whisper import WhisperModel
+        device, compute = choose_device(self.config)
+
+        try:
+            self.model = WhisperModel(
+                self.config["model"],
+                device=device,
+                compute_type=compute
+            )
+            self._device = device
+            _debug_log(f"Modelo carregado localmente: {self.config['model']} em {device} ({compute})")
+        except Exception as e:
+            # Fallback para CPU se CUDA falhar no carregamento
+            if device == "cuda":
+                _debug_log(f"CUDA load local falhou ({e}), fallback CPU")
+                self.model = WhisperModel(
+                    self.config["model"],
+                    device="cpu",
+                    compute_type="int8"
+                )
+                self._device = "cpu"
+            else:
+                raise
+
+    def _denoise_file(self, wav_path):
+        """Aplica o filtro de isolamento de voz RNNoise do FFmpeg."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(script_dir, "../config/rnnoise-models/beguiling-drafter-2018-08-30/bd.rnnn")
+        if not os.path.exists(model_path):
+            # Se não achar caminho relativo (ex: rodando de outro dir), usa absoluto padrão
+            model_path = "/home/brutaldev/dev/jrwhisperlinux/config/rnnoise-models/beguiling-drafter-2018-08-30/bd.rnnn"
+            if not os.path.exists(model_path):
+                return wav_path
+                
+        denoised_path = wav_path + ".denoised.wav"
+        try:
+            cmd = [
+                "nice", "-n", "19", "ffmpeg", "-y", "-i", wav_path,
+                "-af", f"arnndn=m={model_path},aresample=16000",
+                denoised_path
+            ]
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+            if os.path.exists(denoised_path) and os.path.getsize(denoised_path) > 1000:
+                _debug_log(f"Isolamento de voz aplicado com sucesso: {denoised_path}")
+                return denoised_path
+        except Exception as e:
+            _debug_log(f"Falha ao aplicar isolamento de voz: {e}")
+        return wav_path
+
+    def transcribe_file(self, wav_path):
+        """Transcreve o arquivo WAV. Tenta via Daemon, fallback para local."""
+        if not os.path.exists(wav_path):
+            return ""
+
+        original_path = wav_path
+        if self.config.get("noise_suppression", True):
+            wav_path = self._denoise_file(wav_path)
+            
+        try:
+            return self._transcribe_internal(wav_path)
+        finally:
+            # Garante limpeza do arquivo temporário denoised
+            if wav_path != original_path and os.path.exists(wav_path):
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
+
+    def _transcribe_internal(self, wav_path):
+        """Lógica interna de transcrição (Daemon / Local)."""
+
+        if self.use_daemon:
+            try:
+                # Tenta enviar via Socket Unix
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(12.0)  # timeout longo para a transcrição completar
+                s.connect(DAEMON_SOCKET)
+                
+                req = {
+                    "action": "transcribe",
+                    "wav_path": wav_path,
+                    "language": self.config["language"],
+                    "initial_prompt": self.config.get("initial_prompt", ""),
+                    "no_speech_threshold": self.config.get("no_speech_threshold", 0.6),
+                    "log_prob_threshold": self.config.get("log_prob_threshold", -1.0),
+                    "compression_ratio_threshold": self.config.get("compression_ratio_threshold", 2.4),
+                    "condition_on_previous_text": False,
+                    "temperature": 0.0,
+                }
+                s.sendall(json.dumps(req).encode('utf-8'))
+                
+                # Recebe a resposta
+                data = []
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    data.append(chunk)
+                s.close()
+                
+                resp = json.loads(b''.join(data).decode('utf-8'))
+                if "text" in resp:
+                    return resp["text"].strip()
+                else:
+                    _debug_log(f"Erro do daemon: {resp.get('error')}")
+            except Exception as e:
+                _debug_log(f"Falha de comunicação com o daemon ({e}), tentando local...")
+                self.use_daemon = False
+
+        # Fallback local
+        if not self.model:
+            self._load_model()
+            
+        try:
+            segments, _ = self.model.transcribe(
+                wav_path,
+                beam_size=5,  # beam size 5 melhora em pt-BR
+                language=self.config["language"],
+                vad_filter=True,
+                initial_prompt=self.config.get("initial_prompt", ""),
+                no_speech_threshold=self.config.get("no_speech_threshold", 0.6),
+                log_prob_threshold=self.config.get("log_prob_threshold", -1.0),
+                compression_ratio_threshold=self.config.get("compression_ratio_threshold", 2.4),
+                condition_on_previous_text=False,
+                temperature=0.0,
+            )
+            text = " ".join(s.text.strip() for s in segments)
+            return text.strip()
+        except Exception as e:
+            # Se CUDA falhar na transcrição local (ex: cublas missing), tenta CPU
+            if self._device == "cuda":
+                _debug_log(f"CUDA transcribe local falhou ({e}), recriando modelo CPU")
+                try:
+                    from faster_whisper import WhisperModel
+                    self.model = WhisperModel(
+                        self.config["model"],
+                        device="cpu",
+                        compute_type="int8"
+                    )
+                    self._device = "cpu"
+                    segments, _ = self.model.transcribe(
+                        wav_path,
+                        beam_size=5,
+                        language=self.config["language"],
+                        vad_filter=True,
+                        initial_prompt=self.config.get("initial_prompt", ""),
+                        no_speech_threshold=self.config.get("no_speech_threshold", 0.6),
+                        log_prob_threshold=self.config.get("log_prob_threshold", -1.0),
+                        compression_ratio_threshold=self.config.get("compression_ratio_threshold", 2.4),
+                        condition_on_previous_text=False,
+                        temperature=0.0,
+                    )
+                    text = " ".join(s.text.strip() for s in segments)
+                    return text.strip()
+                except Exception:
+                    return ""
+            return ""
+
+
+# ═══════════════════════════════════════════════════════
+#  CALIBRAÇÃO DE THRESHOLD
+# ═══════════════════════════════════════════════════════
+
+def calibrate_threshold(capture, config):
+    """
+    Calibra o threshold de silêncio de forma robusta.
+
+    1. Espera parec produzir dados reais (até 5s)
+    2. Descarta primeiros 200ms (transient de inicialização)
+    3. Mede 1s de ruído ambiente (20 amostras × 50ms)
+    4. Threshold = mediana × 3.0, com piso 0.003 e teto 0.05
+    """
+    # Limpa log anterior
+    try:
+        with open(DEBUG_LOG, "w") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] Calibração iniciada\n")
+    except OSError:
+        pass
+
+    # Passo 1: Espera parec produzir dados reais
+    t0 = time.time()
+    if not capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT):
+        _debug_log("ERRO: parec não produziu dados em 5s")
+        return max(config.get("silence_threshold", 0), 0.003)
+
+    wait_time = time.time() - t0
+    _debug_log(f"parec iniciou em {wait_time:.3f}s")
+
+    # Passo 2: Descarta primeiros 200ms (transient)
+    time.sleep(0.2)
+    capture.get_audio_float32()  # descarta buffer acumulado
+
+    # Passo 3: Mede 1s de ruído ambiente
+    n_samples = int(CALIBRATION_MEASURE_SECS / TICK_INTERVAL)
+    rms_samples = []
+    for _ in range(n_samples):
+        time.sleep(TICK_INTERVAL)
+        rms = capture.get_rms()
+        if rms > 0:
+            rms_samples.append(rms)
+
+    if not rms_samples:
+        _debug_log("AVISO: nenhuma amostra RMS > 0 durante calibração")
+        return 0.003
+
+    # Passo 4: Calcula threshold
+    arr = np.array(rms_samples)
+    noise_median = float(np.median(arr))
+    threshold = np.clip(noise_median * 3.0, 0.003, 0.015)
+
+    _debug_log(
+        f"Calibração: samples={len(rms_samples)} "
+        f"median={noise_median:.6f} min={arr.min():.6f} max={arr.max():.6f} "
+        f"threshold={threshold:.6f}"
+    )
+
+    return float(threshold)
+
+
+def get_display_server():
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return "wayland"
+    session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+    if "wayland" in session_type:
+        return "wayland"
+    return "x11"
+
+
+# ═══════════════════════════════════════════════════════
+#  THREAD PRINCIPAL (background processing)
+# ═══════════════════════════════════════════════════════
+
+class DictateThread(threading.Thread):
+    def __init__(self, overlay, config):
+        super().__init__(daemon=True)
+        self.overlay = overlay
+        self.config = config
+        self.cancelled = False
+        self.partial_transcribing = False
+        self.recording_active = True
+        self.transcriber = Transcriber(self.config)
+
+    def _run_partial_transcription(self, audio_snapshot, sr):
+        try:
+            partial_wav = "/tmp/dictate_partial.wav"
+            with wave.open(partial_wav, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sr)
+                wf.writeframes((audio_snapshot * 32767).astype(np.int16).tobytes())
+            
+            text = self.transcriber.transcribe_file(partial_wav)
+            if text and self.recording_active:
+                if self.config.get("enable_formatting", True):
+                    text = format_transcript(text, self.config)
+                GLib.idle_add(self.overlay.update_text, text, False)
+        except Exception as e:
+            _debug_log(f"Partial transcribe error: {e}")
+        finally:
+            self.partial_transcribing = False
+
+    def _cleanup_gtk(self):
+        """Inicia o fade-out do overlay e encerra o GTK."""
+        def _done():
+            self.overlay.destroy()
+            Gtk.main_quit()
+        self.overlay.fade_out(_done)
+
+    def _paste_text(self, text, active_win):
+        """Cola texto na janela ativa de forma compatível com X11 e Wayland."""
+        display_server = get_display_server()
+        _debug_log(f"Colando texto no {display_server}...")
+        
+        if display_server == "wayland":
+            try:
+                # Copia para o clipboard do Wayland
+                proc = subprocess.Popen(
+                    ["wl-copy"],
+                    stdin=subprocess.PIPE
+                )
+                proc.communicate(input=text.encode("utf-8"), timeout=3)
+                
+                # Simula Ctrl+V via wtype
+                subprocess.run([
+                    "wtype", "-M", "ctrl", "v"
+                ], timeout=3)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                # Fallback: digitação direta via wtype
+                try:
+                    subprocess.run([
+                        "wtype", "--", text
+                    ], timeout=10)
+                except Exception as e:
+                    _debug_log(f"Falha ao colar no Wayland: {e}")
+        else:
+            # Comportamento padrão X11
+            try:
+                proc = subprocess.Popen(
+                    ["xclip", "-selection", "clipboard"],
+                    stdin=subprocess.PIPE
+                )
+                proc.communicate(input=text.encode("utf-8"), timeout=3)
+
+                if active_win:
+                    subprocess.run([
+                        "xdotool", "windowfocus", "--sync", active_win
+                    ], timeout=2)
+                    time.sleep(0.1)
+
+                subprocess.run([
+                    "xdotool", "key", "--clearmodifiers", "ctrl+v"
+                ], timeout=3)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                # Fallback: xdotool type
+                try:
+                    if active_win:
+                        subprocess.run([
+                            "xdotool", "windowfocus", "--sync", active_win
+                        ], timeout=2)
+                        time.sleep(0.1)
+                        subprocess.run([
+                            "xdotool", "type", "--window", active_win,
+                            "--clearmodifiers", "--delay", "2", "--", text
+                        ], timeout=10)
+                    else:
+                        subprocess.run([
+                            "xdotool", "type", "--clearmodifiers", "--delay", "2",
+                            "--", text
+                        ], timeout=10)
+                except Exception as e:
+                    _debug_log(f"Falha ao colar no X11: {e}")
+
+    def run(self):
+        original_volume = None
+        try:
+            mic = self.config.get("mic_device", "@DEFAULT_SOURCE@")
+            sr = self.config["sample_rate"]
+            threshold = self.config.get("silence_threshold", 0)
+            silence_secs = self.config["silence_duration"]
+            listen_timeout = self.config.get("listen_timeout", 15)
+
+            # Ducking de áudio se habilitado
+            if self.config.get("audio_ducking", True):
+                original_volume, _ = get_current_volume()
+                if original_volume is not None:
+                    duck_vol = self.config.get("ducking_volume", 0.20)
+                    _debug_log(f"Audio Ducking: salvando volume ({original_volume:.2f}) e reduzindo para {duck_vol:.2f}")
+                    set_volume(duck_vol)
+
+            # Salva janela ativa ANTES do overlay aparecer (pra colar depois)
+            try:
+                active_win = subprocess.check_output(
+                    ["xdotool", "getactivewindow"], timeout=2
+                ).decode().strip()
+            except Exception:
+                active_win = None
+
+            # Inicia captura
+            capture = AudioCapture(mic, sr)
+            capture.start()
+
+            # Calibração robusta (espera parec produzir dados)
+            GLib.idle_add(self.overlay.update_status, "🎤 Calibrando...", "status-calibrating")
+            if threshold == 0:
+                threshold = calibrate_threshold(capture, self.config)
+            else:
+                # Threshold manual — mas ainda espera parec iniciar
+                capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT)
+                time.sleep(0.2)
+                _debug_log(f"Threshold manual: {threshold:.6f}")
+
+            # Descarta áudio acumulado durante calibração
+            capture.get_audio_float32()
+
+            GLib.idle_add(self.overlay.update_status, "🎤 Aguardando voz...", "status-waiting")
+
+            recording_start = time.time()
+            started = False
+            all_audio = np.array([], dtype=np.float32)
+            speech_confirm_ticks = 0    # ticks consecutivos acima do threshold
+            silence_counter = 0
+            silence_samples_needed = int(silence_secs / TICK_INTERVAL)
+            pre_buffer_captured = False
+            last_partial_time = time.time()
+            self.recording_active = True
+
+            while not self.cancelled:
+                time.sleep(TICK_INTERVAL)
+
+                # RMS instantâneo (sem smoothing — AGENTS.md rule)
+                rms = capture.get_rms()
+                GLib.idle_add(self.overlay.update_level, rms, threshold)
+
+                now = time.time()
+
+                if rms > threshold:
+                    speech_confirm_ticks += 1
+
+                    if not started and speech_confirm_ticks >= SPEECH_START_TICKS:
+                        # Fala confirmada (150ms consecutivos acima do threshold)
+                        started = True
+                        GLib.idle_add(self.overlay.update_status, "🎤 Ouvindo...", "status-listening")
+
+                        # Inclui pré-buffer (300ms antes da fala)
+                        if not pre_buffer_captured:
+                            pre_audio = capture.get_pre_buffer_float32()
+                            if len(pre_audio) > 0:
+                                all_audio = np.concatenate([all_audio, pre_audio])
+                            pre_buffer_captured = True
+
+                    # Se já iniciou, precisamos de pelo menos 3 ticks (150ms) acima do threshold
+                    # para considerar que a fala continua e resetar o contador de silêncio.
+                    # Isso evita que estalos de teclado ou respirações curtas resetem o silêncio.
+                    if started and speech_confirm_ticks >= SPEECH_START_TICKS:
+                        silence_counter = 0
+                else:
+                    speech_confirm_ticks = 0
+                    if started:
+                        silence_counter += 1
+
+                # Timeout (sem fala detectada)
+                if not started and (now - recording_start) > listen_timeout:
+                    _debug_log(f"Timeout: {listen_timeout}s sem fala")
+                    break
+
+                # Silêncio confirmado: N ticks consecutivos abaixo do threshold
+                if started and silence_counter >= silence_samples_needed:
+                    _debug_log(f"Silêncio detectado após {now - recording_start:.1f}s")
+                    break
+
+                # Coleta áudio
+                if started:
+                    chunk = capture.get_audio_float32()
+                    if len(chunk) > 0:
+                        all_audio = np.concatenate([all_audio, chunk])
+                elif speech_confirm_ticks > 0:
+                    # Ainda não confirmou fala, mas tem atividade — coleta por segurança
+                    chunk = capture.get_audio_float32()
+                    if len(chunk) > 0:
+                        all_audio = np.concatenate([all_audio, chunk])
+
+                # Limite máximo
+                if len(all_audio) > sr * self.config["max_duration"]:
+                    _debug_log(f"Limite máximo atingido: {self.config['max_duration']}s")
+                    break
+
+                # Transcrição parcial a cada 800ms em background
+                if started and (now - last_partial_time) > 0.8:
+                    if not self.partial_transcribing and len(all_audio) > sr * 0.5:
+                        self.partial_transcribing = True
+                        last_partial_time = now
+                        audio_snapshot = np.copy(all_audio)
+                        threading.Thread(
+                            target=self._run_partial_transcription,
+                            args=(audio_snapshot, sr),
+                            daemon=True
+                        ).start()
+
+            self.recording_active = False
+            capture.stop()
+
+            # Coleta áudio residual do buffer
+            final_audio = capture.get_audio_float32()
+            if len(final_audio) > 0:
+                all_audio = np.concatenate([all_audio, final_audio])
+
+            # Transcrição final
+            if started and len(all_audio) > sr * 0.3:
+                duration = len(all_audio) / sr
+                GLib.idle_add(self.overlay.update_status, "✨ Transcrevendo...", "status-transcribing")
+                _debug_log(f"Áudio capturado: {duration:.1f}s, {len(all_audio)} samples")
+
+                # Salva áudio para debug
+                try:
+                    with wave.open(LAST_WAV, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(sr)
+                        wf.writeframes((all_audio * 32767).astype(np.int16).tobytes())
+                except OSError:
+                    pass
+
+                final_text = self.transcriber.transcribe_file(LAST_WAV)
+
+                if final_text:
+                    # Formatação de texto se habilitado
+                    if self.config.get("enable_formatting", True):
+                        formatted_text = format_transcript(final_text, self.config)
+                        _debug_log(f"Formatador: {repr(final_text)} -> {repr(formatted_text)}")
+                        final_text = formatted_text
+
+                    _debug_log(f"Texto: {final_text}")
+                    GLib.idle_add(self.overlay.update_text, final_text, True)
+
+                    # Cola na janela original via clipboard
+                    self._paste_text(final_text, active_win)
+
+                    GLib.idle_add(self.overlay.update_status, "✅ Texto colado!", "status-success")
+                else:
+                    audio_rms = float(np.sqrt(np.mean(all_audio**2)))
+                    _debug_log(f"Nenhuma fala reconhecida (RMS={audio_rms:.4f})")
+                    GLib.idle_add(self.overlay.update_status,
+                        "❌ Nenhuma fala detectada", "status-error")
+            else:
+                msg = "Nenhuma fala detectada" if not started else "Áudio muito curto"
+                _debug_log(msg)
+                GLib.idle_add(self.overlay.update_status, f"❌ {msg}", "status-error")
+
+            time.sleep(1.5)
+            GLib.idle_add(self._cleanup_gtk)
+
+        except Exception as e:
+            import traceback
+            try:
+                with open(ERROR_LOG, "w") as f:
+                    traceback.print_exc(file=f)
+            except OSError:
+                pass
+            _debug_log(f"ERRO: {e}")
+            GLib.idle_add(self.overlay.update_status, "⚠️ Algo deu errado. Tente novamente.", "status-error")
+            time.sleep(2)
+            GLib.idle_add(self._cleanup_gtk)
+        finally:
+            # Garante a restauração do volume do sistema
+            if original_volume is not None:
+                _debug_log(f"Audio Ducking: restaurando volume original ({original_volume:.2f})")
+                set_volume(original_volume)
+
+
+# ═══════════════════════════════════════════════════════
+#  MAIN
+# ═══════════════════════════════════════════════════════
+
+def _is_dictate_process(pid):
+    """Verifica se o PID pertence a um processo dictate via /proc/cmdline."""
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            cmdline = f.read().decode('utf-8', errors='replace')
+        return 'dictate' in cmdline
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return False
+
+
+def is_running():
+    if not os.path.exists(PID_FILE):
+        return False
+    try:
+        with open(PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return _is_dictate_process(pid)
+    except (OSError, ValueError):
+        try:
+            os.remove(PID_FILE)
+        except OSError:
+            pass
+        return False
+
+
+def is_daemon_running():
+    if not os.path.exists(DAEMON_PID_FILE):
+        return False
+    try:
+        with open(DAEMON_PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def run_daemon(config):
+    """Inicializa o daemon do Whisper persistente."""
+    # 1. Verifica se já está rodando
+    if is_daemon_running():
+        with open(DAEMON_PID_FILE) as f:
+            pid = int(f.read().strip())
+        print(f"Daemon já está rodando no PID {pid}")
+        sys.exit(0)
+    else:
+        try:
+            if os.path.exists(DAEMON_PID_FILE):
+                os.remove(DAEMON_PID_FILE)
+        except OSError:
+            pass
+
+    # Escreve PID
+    with open(DAEMON_PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+    _debug_log("=== DAEMON INICIADO ===")
+    
+    # 2. Carrega o WhisperModel
+    # Forçamos a limpeza do socket anterior se existir
+    if os.path.exists(DAEMON_SOCKET):
+        try:
+            os.remove(DAEMON_SOCKET)
+        except OSError:
+            pass
+
+    try:
+        from faster_whisper import WhisperModel
+        device, compute = choose_device(config)
+        _debug_log(f"Daemon: Carregando modelo '{config['model']}' em {device} ({compute})...")
+        model = WhisperModel(
+            config["model"],
+            device=device,
+            compute_type=compute
+        )
+        _debug_log("Daemon: Modelo carregado e pronto.")
+    except Exception as e:
+        _debug_log(f"Daemon: Erro crítico ao carregar modelo: {e}")
+        try:
+            os.remove(DAEMON_PID_FILE)
+        except OSError:
+            pass
+        sys.exit(1)
+
+    # 3. Cria socket Unix
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(DAEMON_SOCKET)
+    server.listen(5)
+    
+    # Permissões do socket para o user
+    os.chmod(DAEMON_SOCKET, 0o600)
+
+    # Lógica de shutdown limpo
+    def shutdown(signum, frame):
+        _debug_log("Daemon: Encerrando...")
+        server.close()
+        for f in [DAEMON_SOCKET, DAEMON_PID_FILE]:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        sys.exit(0)
+        
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    print("Daemon do Whisper iniciado no socket:", DAEMON_SOCKET)
+
+    while True:
+        try:
+            conn, _ = server.accept()
+            req_data = conn.recv(16384)
+            if not req_data:
+                conn.close()
+                continue
+                
+            req = json.loads(req_data.decode('utf-8'))
+            action = req.get("action")
+            
+            if action == "transcribe":
+                wav_path = req.get("wav_path")
+                if not wav_path or not os.path.exists(wav_path):
+                    conn.sendall(json.dumps({"error": "WAV file not found"}).encode('utf-8'))
+                    conn.close()
+                    continue
+                
+                _debug_log(f"Daemon: Transcrevendo {wav_path}...")
+                t0 = time.time()
+                try:
+                    segments, _ = model.transcribe(
+                        wav_path,
+                        beam_size=5,
+                        language=req.get("language", config["language"]),
+                        vad_filter=True,
+                        initial_prompt=req.get("initial_prompt", ""),
+                        no_speech_threshold=req.get("no_speech_threshold", 0.6),
+                        log_prob_threshold=req.get("log_prob_threshold", -1.0),
+                        compression_ratio_threshold=req.get("compression_ratio_threshold", 2.4),
+                        condition_on_previous_text=req.get("condition_on_previous_text", False),
+                        temperature=req.get("temperature", 0.0),
+                    )
+                    text = " ".join(s.text.strip() for s in segments).strip()
+                    t1 = time.time()
+                    _debug_log(f"Daemon: Sucesso em {t1-t0:.2f}s -> {text[:100]}")
+                    conn.sendall(json.dumps({"text": text}).encode('utf-8'))
+                except Exception as ex:
+                    _debug_log(f"Daemon: Erro de transcrição: {ex}")
+                    conn.sendall(json.dumps({"error": str(ex)}).encode('utf-8'))
+            else:
+                conn.sendall(json.dumps({"error": "Unknown action"}).encode('utf-8'))
+            
+            conn.close()
+        except Exception as e:
+            _debug_log(f"Daemon: Erro no loop de conexão: {e}")
+
+
+def run_overlay_mode(config):
+    # Tenta adquirir lock exclusivo
+    lock_file = PID_FILE + ".lock"
+    lock_fd = open(lock_file, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        # Já está rodando — matar instância anterior
+        try:
+            with open(PID_FILE) as f:
+                pid = int(f.read().strip())
+            if _is_dictate_process(pid):
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(50):
+                    try:
+                        os.kill(pid, 0)
+                    except OSError:
+                        break
+                    time.sleep(0.1)
+        except (OSError, ValueError):
+            pass
+        lock_fd.close()
+        sys.exit(0)
+
+    # Escreve PID
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+    # Handler para shutdown limpo via SIGTERM
+    def _sigterm_handler(signum, frame):
+        GLib.idle_add(Gtk.main_quit)
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    try:
+        overlay = WhisperFlowOverlay()
+        overlay.show_all()
+
+        thread = DictateThread(overlay, config)
+        thread.start()
+
+        Gtk.main()
+
+    finally:
+        try:
+            os.remove(PID_FILE)
+        except OSError:
+            pass
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+
+def show_status():
+    config = load_config()
+    device, compute = choose_device(config)
+    free_vram = get_free_vram_mb()
+    cublas = _find_cublas_path()
+    daemon_running = is_daemon_running()
+    print("Dictate v3.1 — WhisperFlow for Linux")
+    print(f"  Modelo:        {config['model']}")
+    print(f"  Engine:        {device} ({compute})")
+    print(f"  VRAM livre:    {free_vram} MB")
+    print(f"  cuBLAS:        {cublas or 'não encontrado'}")
+    print(f"  Microfone:     {config.get('mic_device', '@DEFAULT_SOURCE@')}")
+    print(f"  Idioma:        {config['language']}")
+    print(f"  Threshold:     {config.get('silence_threshold') or 'auto'}")
+    print(f"  Silence dur:   {config.get('silence_duration', 2.5)}s")
+    print(f"  Formatação:    {'Ativa' if config.get('enable_formatting', True) else 'Inativa'}")
+    print(f"  Ducking Áudio: {'Ativo (Vol: ' + str(int(config.get('ducking_volume', 0.20)*100)) + '%)' if config.get('audio_ducking', True) else 'Inativo'}")
+    print(f"  Overlay:       GTK3")
+    print(f"  Status:        {'GRAVANDO' if is_running() else 'Parado'}")
+    print(f"  Daemon Mode:   {'ATIVO (Em execução)' if daemon_running else 'Inativo (Fallback local)'}")
+
+
+def main():
+    config = load_config()
+    flags = [a for a in sys.argv[1:] if a.startswith('--') or a.startswith('-')]
+
+    if not flags:
+        run_overlay_mode(config)
+        return
+
+    arg = flags[0]
+    if arg == "--daemon":
+        run_daemon(config)
+    elif arg == "--status":
+        show_status()
+    elif arg == "--config":
+        print(json.dumps(config, indent=2))
+    elif arg in ("-h", "--help"):
+        print(__doc__)
+    else:
+        run_overlay_mode(config)
+
+
+if __name__ == "__main__":
+    main()

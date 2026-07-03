@@ -1,0 +1,18 @@
+# JRWhisperLinux
+__pycache__/
+*.pyc
+*.pyo
+
+# Debug artifacts
+/tmp/dictate_*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# User config (not tracked)
+config/config.json
