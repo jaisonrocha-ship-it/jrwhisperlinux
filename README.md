@@ -53,14 +53,14 @@ O script calibra o threshold de ruído do seu ambiente automaticamente. Ele igno
 
 ---
 
-## 🎯 Para quem é?
+## Para quem serve
 
 | Perfil | Uso |
 |--------|-----|
-| 👨‍💻 **Desenvolvedores** | Escreva código, commits, documentação e logs sem tirar as mãos do teclado |
-| ✍️ **Escritores** | Produza textos longos, artigos e documentos falando naturalmente |
-| ♿ **Acessibilidade** | Alternativa de entrada para LER, dificuldades motoras ou preferência por voz |
-| 🌎 **Multilíngue** | Suporte nativo a PT-BR (95% acurácia) + 90+ idiomas do Whisper |
+| **Desenvolvimento** | Escreva comentários, commits e documentação sem tirar as mãos do teclado |
+| **Produção de texto** | Artigos, correspondência e relatórios — falar é mais rápido que digitar |
+| **Acessibilidade** | Alternativa ao teclado para LER, tendinite ou limitações motoras |
+| **Português brasileiro** | 95% de acurácia com o modelo turbo; vocabulário customizável por domínio |
 
 ## 💻 Compatibilidade
 
@@ -79,9 +79,9 @@ O script calibra o threshold de ruído do seu ambiente automaticamente. Ele igno
 
 ---
 
-## 📥 Instalação
+## Instalação
 
-### 1 comando (recomendado)
+### Via script (recomendado)
 
 ```bash
 curl -fsSL https://jrwhisper.jasonrock.dev/install.sh | bash
@@ -91,7 +91,7 @@ Instala tudo automaticamente: dependências do sistema, ambiente Python, atalho 
 
 Pressione **Super+Shift+V** e comece a ditar. Pronto.
 
-### Instalação manual (via Git)
+### Manual (via Git)
 
 ```bash
 git clone https://github.com/jaisonrocha-ship-it/jrwhisperlinux.git
