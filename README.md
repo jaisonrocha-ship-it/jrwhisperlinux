@@ -77,7 +77,7 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
 O instalador irá configurar o ambiente virtual do Python (`venv`) com acesso às bibliotecas GTK do sistema (`--system-site-packages`), instalará as dependências Python necessárias e registrará o atalho local.
 
 ```bash
-git clone https://github.com/seu-usuario/jrwhisperlinux.git
+git clone https://github.com/jaisonrocha-ship-it/jrwhisperlinux.git
 cd jrwhisperlinux
 bash scripts/install.sh
 ```
@@ -109,7 +109,7 @@ Para ter latência zero no acionamento, configure o Daemon para carregar o model
 
 No painel de controle da sua distribuição (ex: Configurações do Sistema -> Teclado -> Atalhos Personalizados):
 * **Nome:** Ditado JRWhisper
-* **Comando:** `/home/brutaldev/.local/bin/dictate` (ou o caminho correto do seu binário)
+* **Comando:** `~/.local/bin/dictate` (ou o caminho onde o script foi instalado)
 * **Atalho:** `Super+Shift+V` (ou o de sua preferência)
 
 ---

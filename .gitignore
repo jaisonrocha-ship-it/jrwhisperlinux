@@ -1,7 +1,16 @@
 # JRWhisperLinux
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual env
+venv/
+.venv/
 
 # Debug artifacts
 /tmp/dictate_*
@@ -9,6 +18,8 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
@@ -16,3 +27,9 @@ Thumbs.db
 
 # User config (not tracked)
 config/config.json
+
+# Backups
+backups/
+
+# Logs
+*.log

@@ -865,10 +865,7 @@ class Transcriber:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         model_path = os.path.join(script_dir, "../config/rnnoise-models/beguiling-drafter-2018-08-30/bd.rnnn")
         if not os.path.exists(model_path):
-
-            model_path = "/home/brutaldev/dev/jrwhisperlinux/config/rnnoise-models/beguiling-drafter-2018-08-30/bd.rnnn"
-            if not os.path.exists(model_path):
-                return wav_path
+            return wav_path
                 
         denoised_path = wav_path + ".denoised.wav"
         try:
@@ -1097,10 +1094,11 @@ def list_mic_devices():
 
 
 class DictateThread(threading.Thread):
-    def __init__(self, overlay, config):
+    def __init__(self, overlay, config, active_win=None):
         super().__init__(daemon=True)
         self.overlay = overlay
         self.config = config
+        self.active_win = active_win
         self.cancelled = False
         self.partial_transcribing = False
         self.recording_active = True
@@ -1214,12 +1212,8 @@ class DictateThread(threading.Thread):
                     set_volume(duck_vol)
 
 
-            try:
-                active_win = subprocess.check_output(
-                    ["xdotool", "getactivewindow"], timeout=2
-                ).decode().strip()
-            except Exception:
-                active_win = None
+            # Usa janela capturada antes do overlay aparecer
+            active_win = self.active_win
 
 
             capture = AudioCapture(mic, sr)
@@ -2283,10 +2277,18 @@ def run_overlay_mode(config):
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
     try:
+        # Captura janela ativa ANTES de mostrar o overlay
+        try:
+            active_win = subprocess.check_output(
+                ["xdotool", "getactivewindow"], timeout=2
+            ).decode().strip()
+        except Exception:
+            active_win = None
+
         overlay = WhisperFlowOverlay()
         overlay.show_all()
 
-        thread = DictateThread(overlay, config)
+        thread = DictateThread(overlay, config, active_win=active_win)
         overlay.dictate_thread = thread
         thread.start()
 
