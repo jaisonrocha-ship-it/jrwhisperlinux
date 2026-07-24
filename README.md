@@ -153,6 +153,60 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 
 ---
 
+## 🔓 Stack Completa & Licenças — 100% Open Source
+
+**JRWhisperLinux é software livre.** Cada dependência foi auditada. Nenhum componente proprietário ou código fechado.
+
+### Python (pip) — Todas MIT/BSD/Apache 2.0
+
+| Pacote | Licença | Função |
+|--------|---------|--------|
+| `faster-whisper` | MIT | Transcrição via CTranslate2 (SYSTRAN) |
+| `ctranslate2` | MIT | Inferência otimizada GPU/CPU |
+| `onnxruntime` | MIT | Runtime de redes neurais |
+| `numpy` | BSD 3-Clause | Processamento de áudio, arrays |
+| `huggingface-hub` | Apache 2.0 | Download de modelos |
+| `PyAV` | BSD 3-Clause | Binding Python para FFmpeg |
+| `tqdm` | MIT + MPL 2.0 | Barras de progresso |
+
+### Interface (sistema) — Todas LGPL/MPL
+
+| Componente | Licença | Função |
+|------------|---------|--------|
+| PyGObject (GTK3) | LGPL 2.1+ | Overlay visual |
+| Pango | LGPL 2.1 | Renderização de texto |
+| Cairo | LGPL 2.1 / MPL 1.1 | Gráficos vetoriais |
+
+### Sistema (apt) — Ferramentas externas, não bundadas
+
+| Ferramenta | Licença | Função |
+|------------|---------|--------|
+| `xdotool` | BSD | Injeção de texto (X11) |
+| `wtype` | MIT | Injeção de texto (Wayland) |
+| `xclip` | GPL 2 | Clipboard X11 *(externo)* |
+| `wl-clipboard` | GPL 3 | Clipboard Wayland *(externo)* |
+| `ffmpeg` | LGPL/GPL | Processamento de áudio *(externo)* |
+| PulseAudio | LGPL 2.1 | Captura de microfone |
+| PipeWire | LGPL 2.1 | Servidor de áudio moderno |
+
+> ⚠️ xclip, wl-clipboard e ffmpeg têm licenças GPL, mas são **dependências externas de sistema** — o usuário as instala via `apt`, não são bundadas no projeto. O JRWhisperLinux em si (MIT) não herda obrigações de copyleft.
+
+### Modelos de Rede Neural
+
+| Modelo | Licença |
+|--------|---------|
+| Whisper (OpenAI) | MIT |
+| RNNoise Models | Domínio Público |
+| Silero VAD | MIT |
+
+### Auditoria
+
+- **Data:** 24/07/2026
+- **Método:** `pip show` para cada pacote Python + verificação de licenças de sistema
+- **Resultado:** ✅ Zero código proprietário. Zero dependência fechada. Zero restrições de uso comercial.
+
+---
+
 ## 📄 Licença
 
 Este projeto é disponibilizado sob a **Licença MIT**. Sinta-se livre para usar, modificar e distribuir.
