@@ -1,36 +1,32 @@
 # 🎤 JRWhisperLinux
 
-> Ditado por voz premium com latência zero e isolamento de voz neural para Linux (X11 & Wayland), inspirado no fluxo de experiência (UX) do macOS WhisperFlow.
+> Fale. O texto aparece onde você está. Ditado por voz para Linux, roda na sua máquina, offline.
 
 <p align="center">
-  <a href="https://jrwhisper.jasonrock.dev"><img src="https://img.shields.io/badge/🌐%20Site-jrwhisper.jasonrock.dev-22C55E?style=flat-square" alt="Site"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/Licença-MIT-blue.svg?style=flat-square" alt="License"></a>
-  <a href="docs/licenses.md"><img src="https://img.shields.io/badge/Dependências-100%25%20Open%20Source-22C55E?style=flat-square" alt="Open Source"></a>
+  <a href="https://jrwhisper.jasonrock.dev"><img src="https://img.shields.io/badge/Site-jrwhisper.jasonrock.dev-F59E0B?style=flat-square" alt="Site"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Licença-MIT-blue.svg?style=flat-square" alt="MIT"></a>
+  <a href="docs/licenses.md"><img src="https://img.shields.io/badge/Deps-100%25%20livre-F59E0B?style=flat-square" alt="Open Source"></a>
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python" alt="Python">
   <img src="https://img.shields.io/badge/GPU-CUDA-76B900?style=flat-square&logo=nvidia" alt="CUDA">
 </p>
 
 ---
 
-## 🌟 O que é o JRWhisperLinux?
+## O que é
 
-O **JRWhisperLinux** é um assistente de ditado por voz profissional desenvolvido para distribuições Linux. Ele permite que você converta sua fala em texto instantaneamente e a insira diretamente no cursor de qualquer aplicativo ativo, bastando pressionar um atalho de teclado global.
-
-A aplicação combina um modelo de Inteligência Artificial local de alta fidelidade com uma interface gráfica minimalista e fluida, oferecendo uma experiência de entrada de texto nativa, veloz e de alta precisão.
+JRWhisperLinux captura áudio do microfone, transcreve com um modelo de IA rodando localmente e cola o texto no campo ativo. Aperte Super+Shift+V, fale, e o texto aparece onde você está. Sua voz nunca sai da sua máquina.
 
 ---
 
-## 🛠️ Tecnologias Utilizadas
+## Tecnologias
 
-A arquitetura do projeto foi desenhada para priorizar performance máxima, consumo eficiente de VRAM/CPU e latência zero:
-
-| Camada | Tecnologia | Descrição |
+| Camada | Tecnologia | O que faz |
 | :--- | :--- | :--- |
-| **Inteligência Artificial** | `faster-whisper` (medium) | Transcrição local otimizada rodando em GPU NVIDIA (CUDA `int8_float16`) ou fallback automático para CPU (`int8`). |
-| **Isolamento de Voz** | `RNNoise` via FFmpeg `arnndn` | Filtro de rede neural recorrente (RNN) que isola a voz humana, eliminando músicas de fundo, cliques de teclado e estalos. |
-| **Interface Visual** | GTK3 / Cairo / Pango | Janela de overlay translúcida antialiased com animação Cairo da onda Siri a 60 FPS e renderização de texto via Pango markup. |
-| **Captura de Áudio** | PulseAudio / PipeWire (`parec`) | Captura direta em 16kHz mono com latência ultra-baixa de fragmentação (30ms). |
-| **Simulação de Input** | `xclip` / `xdotool` / `wl-clipboard` / `wtype` | Emulador híbrido de área de transferência e teclas que detecta e suporta sessões gráficas X11 e Wayland. |
+| **IA** | `faster-whisper` (turbo) | Transcrição local em GPU NVIDIA (CUDA int8_float16) ou CPU (int8). |
+| **Voz** | `RNNoise` via FFmpeg `arnndn` | Rede neural que separa sua voz do ruído ambiente — teclado, música, conversa de fundo. |
+| **Visual** | GTK3 / Cairo / Pango | Janela overlay translúcida com VU meter e texto ao vivo. |
+| **Áudio** | PulseAudio / PipeWire (`parec`) | Captura em 16kHz mono com 30ms de latência. |
+| **Input** | `xdotool` / `wtype` / `xclip` / `wl-clipboard` | Detecta X11 ou Wayland e injeta o texto na janela ativa. |
 
 ---
 
