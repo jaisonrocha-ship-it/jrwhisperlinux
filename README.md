@@ -2,6 +2,8 @@
 
 > Ditado por voz premium com latência zero e isolamento de voz neural para Linux (X11 & Wayland), inspirado no fluxo de experiência (UX) do macOS WhisperFlow.
 
+🌐 **[jrwhisper.jasonrock.dev](https://jrwhisper.jasonrock.dev)** — Site do projeto
+
 ---
 
 ## 🌟 O que é o JRWhisperLinux?
