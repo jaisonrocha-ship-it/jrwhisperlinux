@@ -57,32 +57,45 @@ O script calibra o threshold de ruído do seu ambiente automaticamente. Ele igno
 
 ---
 
-## 💻 Compatibilidade e Sistemas Suportados
+## 🎯 Para quem é?
 
-* **Sistemas Operacionais:** Linux Mint 21/22+, Ubuntu 22.04/24.04+, Debian 12+, Fedora 38+ e Arch Linux.
-* **Display Servers:** Compatibilidade total e automática com sessões **X11** e **Wayland**.
-* **Requisitos de Hardware:**
-  * **Modo GPU (Recomendado):** Placa NVIDIA (ex: RTX 4060) com driver CUDA instalado e ~1.1 GB de VRAM livre.
-  * **Modo CPU (Fallback):** Roda localmente em qualquer processador moderno usando quantização int8 de alto desempenho.
+| Perfil | Uso |
+|--------|-----|
+| 👨‍💻 **Desenvolvedores** | Escreva código, commits, documentação e logs sem tirar as mãos do teclado |
+| ✍️ **Escritores** | Produza textos longos, artigos e documentos falando naturalmente |
+| ♿ **Acessibilidade** | Alternativa de entrada para LER, dificuldades motoras ou preferência por voz |
+| 🌎 **Multilíngue** | Suporte nativo a PT-BR (95% acurácia) + 90+ idiomas do Whisper |
+
+## 💻 Compatibilidade
+
+| Distro | Status |
+|--------|--------|
+| Linux Mint 22 (Cinnamon) | ✅ **Ambiente primário de desenvolvimento** |
+| Linux Mint 21 | ✅ Suportado |
+| Ubuntu 24.04 | ✅ Suportado (GNOME, X11/Wayland) |
+| Ubuntu 22.04 | ✅ Suportado |
+| Debian 12 | ✅ Suportado |
+| Fedora 38+ | ⚠️ Instalação manual (use `dnf`) |
+| Arch Linux | ⚠️ Instalação manual (use `pacman`) |
+
+**Desktops:** Cinnamon (atalho automático), GNOME, XFCE, KDE · **Display:** X11 (nativo), Wayland (suportado)
+**Pré-requisitos:** Python 3.10+, 4GB RAM, 2GB disco · GPU NVIDIA opcional (acelera 10x)
 
 ---
 
-## 📥 Guia de Instalação
+## 📥 Instalação
 
-### Passo 1: Instalar as Dependências do Sistema
-
-Instale os pacotes necessários no seu gerenciador de pacotes (exemplo para Ubuntu/Debian/Mint):
+### 1 comando (recomendado)
 
 ```bash
-# Dependências de áudio, interface, emulação X11 e Wayland
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
-                 pulseaudio-utils xdotool xclip \
-                 wtype wl-clipboard ffmpeg
+curl -fsSL https://jrwhisper.jasonrock.dev/install.sh | bash
 ```
 
-### Passo 2: Clonar o Repositório e Executar o Instalador
+Instala tudo automaticamente: dependências do sistema, ambiente Python, atalho de teclado, daemon e pré-carrega o modelo. Funciona em qualquer Debian/Ubuntu/Mint.
 
-O instalador irá configurar o ambiente virtual do Python (`venv`) com acesso às bibliotecas GTK do sistema (`--system-site-packages`), instalará as dependências Python necessárias e registrará o atalho local.
+Pressione **Super+Shift+V** e comece a ditar. Pronto.
+
+### Instalação manual (via Git)
 
 ```bash
 git clone https://github.com/jaisonrocha-ship-it/jrwhisperlinux.git
