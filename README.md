@@ -2,7 +2,13 @@
 
 > Ditado por voz premium com latência zero e isolamento de voz neural para Linux (X11 & Wayland), inspirado no fluxo de experiência (UX) do macOS WhisperFlow.
 
-🌐 **[jrwhisper.jasonrock.dev](https://jrwhisper.jasonrock.dev)** — Site do projeto
+<p align="center">
+  <a href="https://jrwhisper.jasonrock.dev"><img src="https://img.shields.io/badge/🌐%20Site-jrwhisper.jasonrock.dev-22C55E?style=flat-square" alt="Site"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Licença-MIT-blue.svg?style=flat-square" alt="License"></a>
+  <a href="docs/licenses.md"><img src="https://img.shields.io/badge/Dependências-100%25%20Open%20Source-22C55E?style=flat-square" alt="Open Source"></a>
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/GPU-CUDA-76B900?style=flat-square&logo=nvidia" alt="CUDA">
+</p>
 
 ---
 
