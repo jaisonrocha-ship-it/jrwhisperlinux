@@ -11,7 +11,8 @@ import wave
 import numpy as np
 from gi.repository import Gtk, GLib
 
-from .audio import AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume, is_yeti, resolve_mic, set_volume, yeti_hw_problem
+from .audio import (AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume,
+                    is_yeti, pause_media, resolve_mic, resume_media, set_volume, yeti_hw_problem)
 from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text
@@ -51,6 +52,7 @@ class DictateThread(threading.Thread):
         self.recording_active = True
         self.transcriber = None
         self.original_volume = None
+        self.paused_media = []
         self.pasted = False
         # waiting (nada dito) | listening | busy (transcrevendo/IA) | choosing (revisão com IA)
         self.stage = "waiting"
@@ -117,6 +119,8 @@ class DictateThread(threading.Thread):
             keys = ptt.watcher_for(self.config)
             handsfree = bool(self.config.get("handsfree_enabled"))
 
+            if self.config.get("pause_media", True):
+                self.paused_media = pause_media()
             play_sound(self.config, "start")  # antes do ducking, senão sai baixo demais
             if self.config.get("audio_ducking", True):
                 self.original_volume, _ = get_current_volume()
@@ -193,7 +197,7 @@ class DictateThread(threading.Thread):
             time.sleep(2)
             GLib.idle_add(self._cleanup_gtk)
         finally:
-            self.restore_volume()
+            self.restore_audio()
             if self.pasted:
                 play_sound(self.config, "done")
 
@@ -346,7 +350,7 @@ class DictateThread(threading.Thread):
 
     def _choose(self, raw_text, result):
         """IA ligada: o texto fica na tela com opções (reescrever, colar, copiar, descartar) até a escolha."""
-        self.restore_volume()  # ninguém revisa texto com o som abafado
+        self.restore_audio()  # ninguém revisa texto com o som abafado
         modes = ai.enabled_modes(self.config)
         # Prefixo de voz já foi usado na 1ª passada; ao trocar de modo, vale o botão.
         body = ai.detect_voice_mode(self.config, raw_text)[1] if self.config.get("ai_voice_prefix", True) else raw_text
@@ -397,7 +401,10 @@ class DictateThread(threading.Thread):
             GLib.idle_add(self.overlay.update_status, done, "status-error" if action == "discard" else "status-success")
             return
 
-    def restore_volume(self):
+    def restore_audio(self):
+        """Volume de volta e mídia pausada retomada (uma vez só, de qualquer thread)."""
+        media, self.paused_media = self.paused_media, []
+        resume_media(media)
         vol, self.original_volume = self.original_volume, None
         if vol is not None:
             _debug_log(f"Audio Ducking: restaurando volume original ({vol:.2f})")
@@ -472,7 +479,7 @@ def run_overlay_mode(config, mode=None):
 
         Gtk.main()
         thread.cancelled = True
-        thread.restore_volume()
+        thread.restore_audio()
 
     finally:
         try:

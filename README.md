@@ -39,7 +39,7 @@ Minimalista por padrão: um atalho, um orbe que reage à sua voz, o texto colado
 * **Latência zero:** o modelo Whisper fica carregado na GPU por um serviço (`$XDG_RUNTIME_DIR/dictate_daemon.sock`); a captura começa assim que o atalho é pressionado. Trocar o modelo nos Ajustes vale no próximo ditado, sem reiniciar nada.
 * **Comandos de voz:** "vírgula", "ponto final", "nova linha", "novo parágrafo"… mesmo quando o Whisper já pontuou o comando, sai uma pontuação só.
 * **Overlay em três estilos:** Orbe (padrão, esfera de plasma com o mic no centro), Ondas ou Barras de espectro. Cor de destaque, tamanho, posição, brilho e "reduzir movimento" ajustáveis, com pré-visualização ao vivo. Aparece no monitor onde está o mouse e não bloqueia cliques.
-* **Isolamento de voz:** RNNoise limpa música, ventilador e teclado antes da transcrição.
+* **Isolamento de voz:** RNNoise limpa música, ventilador e teclado antes da transcrição; o que estiver tocando no computador (navegador, Spotify…) é pausado durante o ditado e retomado depois.
 * **Detecção de fala com histerese:** 150 ms para confirmar que você começou e uma pausa configurável para encerrar.
 * **Calibração por microfone:** medidor ao vivo com espectro; cada mic guarda o próprio limiar. Sem o mic preferido, usa o padrão do sistema e avisa.
 

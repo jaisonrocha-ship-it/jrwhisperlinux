@@ -2,13 +2,14 @@ import re
 
 # Frases que o Whisper "ouve" em ruído/silêncio (legendas de vídeo do treino). Só valem como texto inteiro.
 HALLUCINATIONS = re.compile(
-    r"(notifica[çc][õo]es de novos v[íi]deos|inscreva-se|ative o sininho|obrigad[oa] por assistir"
+    r"(notifica[çc][õo]es de novos v[íi]deos|descri[çc][ãa]o do v[íi]deo|inscreva-se|ative o sininho"
+    r"|obrigad[oa] por assistir"
     r"|legendas? (pela|por|da) comunidade|amara\.org|at[ée] o pr[óo]ximo v[íi]deo)", re.IGNORECASE)
 
 
 def is_hallucination(text):
     """Texto curto que é só uma frase-fantasma conhecida (ditado de verdade passa)."""
-    return bool(text) and len(text.split()) <= 15 and bool(HALLUCINATIONS.search(text))
+    return bool(text) and len(text.split()) <= 25 and bool(HALLUCINATIONS.search(text))
 
 
 def format_transcript(text: str, config) -> str:

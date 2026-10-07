@@ -493,6 +493,9 @@ class SettingsWindow(Gtk.Window):
         lb = t.group(box, "Processamento")
         t.switch_row(lb, "Supressão de ruído", "Isola a voz com RNNoise antes de transcrever.",
                      self.config.get("noise_suppression", True), lambda v: self.set("noise_suppression", v))
+        t.switch_row(lb, "Pausar música e vídeos", "Pausa o que estiver tocando (navegador, Spotify…) enquanto "
+                     "você fala e retoma depois. Sem isso, o mic ouve a música como se fosse voz.",
+                     self.config.get("pause_media", True), lambda v: self.set("pause_media", v))
         t.switch_row(lb, "Abaixar o som ao ditar", "Reduz o volume do sistema enquanto você fala.",
                      self.config.get("audio_ducking", True), lambda v: self.set("audio_ducking", v))
         t.slider_row(lb, "Volume durante o ditado", None, 0, 1, 0.05, self.config.get("ducking_volume", 0.2),

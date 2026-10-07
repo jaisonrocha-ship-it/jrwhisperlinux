@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
     "remove_fillers": True,
     "voice_commands": True,
     "audio_ducking": True,
+    "pause_media": True,
     "ducking_volume": 0.20,
     "noise_suppression": True,
     # Aparência (flat: load_config faz merge raso com o config do usuário)

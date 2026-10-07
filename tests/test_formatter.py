@@ -78,10 +78,14 @@ def run_tests():
     
     failed = False
     for junk in ("Acesse www.Incoterms.com.br para receber notificações de novos vídeos.",
-                 "Legendas pela comunidade Amara.org", "Obrigado por assistir!"):
+                 "Legendas pela comunidade Amara.org", "Obrigado por assistir!",
+                 "Acesse o link na descrição do vídeo para ver mais detalhes sobre os produtos.",
+                 "Acesse o site www.incoterms.com.br e acesse o link na descrição do vídeo para receber "
+                 "notificações de novos vídeos."):
         assert textproc.is_hallucination(junk), junk
     assert not textproc.is_hallucination("Preciso das notificações de novos vídeos do canal da empresa "
-                                         "para o relatório de marketing de amanhã cedo, por favor, sem falta mesmo.")
+                                         "para o relatório de marketing de amanhã cedo, por favor, sem falta mesmo, porque o diretor "
+                                         "pediu isso ontem.")
     assert not textproc.is_hallucination("Obrigado pela reunião de hoje.")
     print("Alucinações: PASSED")
     print("=" * 60)

@@ -8,6 +8,7 @@ import re
 import shutil
 from collections import deque
 import numpy as np
+from gi.repository import Gio, GLib
 
 from .config import CALIBRATION_MEASURE_SECS, CALIBRATION_WAIT_TIMEOUT, DEBUG_LOG, ERROR_LOG, HW_GAIN_TOLERANCE, PRE_BUFFER_SECS, THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log, save_config
 
@@ -47,6 +48,55 @@ def set_volume(val):
         )
     except Exception as e:
         _debug_log(f"Falha ao definir volume: {e}")
+
+
+MPRIS_PATH = "/org/mpris/MediaPlayer2"
+
+
+def _dbus(bus, name, path, iface, method, args=None):
+    return bus.call_sync(name, path, iface, method, args, None, Gio.DBusCallFlags.NONE, 500, None)
+
+
+def pause_media():
+    """Pausa o que toca via MPRIS (navegador, Spotify, VLC…): o mic capta as caixas de som e a
+    música vira "fala" sem fim. Devolve os players pausados, para retomar só esses."""
+    paused = []
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        names = _dbus(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                      "ListNames").unpack()[0]
+    except GLib.Error as e:
+        _debug_log(f"MPRIS indisponível: {e}")
+        return paused
+    for name in names:
+        if not name.startswith("org.mpris.MediaPlayer2."):
+            continue
+        try:
+            status = _dbus(bus, name, MPRIS_PATH, "org.freedesktop.DBus.Properties", "Get",
+                           GLib.Variant("(ss)", ("org.mpris.MediaPlayer2.Player", "PlaybackStatus"))).unpack()[0]
+            if status == "Playing":
+                _dbus(bus, name, MPRIS_PATH, "org.mpris.MediaPlayer2.Player", "Pause")
+                paused.append(name)
+        except GLib.Error as e:
+            _debug_log(f"MPRIS {name}: {e}")
+    if paused:
+        _debug_log(f"Mídia pausada: {paused}")
+    return paused
+
+
+def resume_media(names):
+    if not names:
+        return
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    except GLib.Error:
+        return
+    for name in names:
+        try:
+            _dbus(bus, name, MPRIS_PATH, "org.mpris.MediaPlayer2.Player", "Play")
+        except GLib.Error as e:  # player fechado nesse meio-tempo
+            _debug_log(f"MPRIS {name}: {e}")
+    _debug_log(f"Mídia retomada: {names}")
 
 
 class AudioCapture:

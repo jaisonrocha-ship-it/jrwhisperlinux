@@ -8,6 +8,7 @@
 * **Revisão com IA:** o texto espera na tela; corrigir palavra com um clique, trocar de modo, colar, copiar ou descartar. Teclado: Enter cola, Esc descarta, Ctrl+C copia, 1–9 trocam o modo. Texto longo rola com a roda do mouse.
 * **2º toque no atalho encerra e transcreve** (antes cancelava e descartava o áudio). Na revisão, cola; antes de falar, cancela.
 * **Trocar o modelo não exige reiniciar o serviço:** o daemon recarrega no próximo ditado.
+* **Pausa música e vídeos ao ditar** (MPRIS: navegador, Spotify, VLC…) e retoma depois. Com música tocando, o mic ouvia as caixas de som como fala: o ditado não encerrava, a letra aparecia na tela e o Whisper alucinava.
 
 ### Bugs resolvidos
 1. **Idioma "Detectar automaticamente" não transcrevia nada:** o faster-whisper recusa `"auto"`; agora vira detecção de verdade.
