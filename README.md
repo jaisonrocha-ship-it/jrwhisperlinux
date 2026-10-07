@@ -131,11 +131,11 @@ No painel de controle da sua distribuição (ex: Configurações do Sistema -> T
 
 ### 3. Calibrar o Microfone (opcional)
 
-```bash
-dictate --calibrate
-```
+Abra **Configurações → Áudio & Captação → Calibrar…** (ou `dictate --calibrate-gui`). A janela mostra o nível do mic ao vivo em dBFS, mede 3 s de silêncio e 5 s de fala e salva o limiar **por microfone**. No terminal: `dictate --calibrate`.
 
-Mede 3s de silêncio e 5s de fala, mostra o nível em dBFS e salva o limiar. Se o mic estiver mutado ou com ganho baixo, avisa e não salva. Para voltar ao automático, coloque o limite em "Auto" no painel (`dictate -s`).
+* Cada mic guarda a própria calibração. Sem calibração, o ditado mede o ruído a cada uso (automático).
+* Se o mic configurado estiver desconectado, o ditado usa o mic padrão do sistema e avisa no overlay.
+* Yeti GX com `yeti-ctl` (controle HID++ do ganho) em `~/dev/yeti-ctl`: a calibração registra o ganho de hardware; se ele mudar mais de 5 unidades, o ditado volta ao automático até você recalibrar.
 
 ---
 

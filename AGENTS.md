@@ -22,7 +22,7 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 
 | Arquivo | Função |
 |---------|--------|
-| `src/dictate` | Script principal (2475 linhas) — código de produção |
+| `src/dictate` | Script principal (3020 linhas) — código de produção |
 | `scripts/install.sh` | One-line installer (curl | bash) |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
@@ -58,7 +58,7 @@ bash scripts/install.sh
 
 - **CUDA OOM na RTX 4060**: desktop ocupa 4-5GB. Modelo turbo em int8_float16 usa ~1GB.
 - **Yeti GX mute físico**: microfone captura near-zero quando mutado. Verificar antes de debugar "sem áudio".
-- **Yeti GX ganho de hardware**: o miniapp OSBOT Control (seção Yeti) ajusta o ganho interno do mic. Em zero, a voz chega a ~-80 dBFS mesmo com ALSA/PipeWire em 100% — o `amixer` não enxerga esse ganho. Diagnóstico rápido: `dictate --calibrate` (voz normal fica entre -20 e -50 dBFS); com `~/dev/yeti-ctl` presente ele mostra ganho/mute do hardware e o overlay diz "Yeti mutado no hardware" / "Ganho do Yeti em X/100".
+- **Yeti GX ganho de hardware**: o miniapp OSBOT Control (seção Yeti) ajusta o ganho interno do mic. Em zero, a voz chega a ~-80 dBFS mesmo com ALSA/PipeWire em 100% — o `amixer` não enxerga esse ganho. Diagnóstico rápido: `dictate --calibrate` (voz normal fica entre -20 e -50 dBFS); com `~/dev/yeti-ctl` presente ele mostra ganho/mute do hardware e o overlay diz "Yeti mutado no hardware" / "Ganho do Yeti em X/100". Calibração é por mic (`mic_calibrations` no config, com `hw_gain` do Yeti); ganho fora de ±5 invalida e volta ao automático. Janela: `CalibrationWindow` (`--calibrate-gui`), aberta também pelo applet OBSBOT Control (aba MIC).
 - **parec latency (PipeWire)**: use `--latency-msec=30` para evitar buffer de 2 segundos.
 - **Config.json no .gitignore**: alterações locais não são commitadas.
 - **RNNoise**: `config/bd.rnnn` (~300KB, domínio público) é o único modelo usado. Instalado em `~/.config/dictate/`. O teste `test_capture_prebuffer.py` rejeita arquivo < 100KB (já houve um "404: Not Found" salvo no lugar).
