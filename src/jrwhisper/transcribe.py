@@ -103,7 +103,7 @@ def _transcribe_kwargs(cfg):
     language = cfg.get("language") or "pt"
     return dict(
         beam_size=5,
-        vad_filter=True,
+        vad_filter=cfg.get("vad_filter", True),
         language=None if language == "auto" else language,  # None = o Whisper detecta
         initial_prompt=cfg.get("initial_prompt", ""),
         no_speech_threshold=cfg.get("no_speech_threshold", 0.6),
@@ -116,6 +116,10 @@ def _transcribe_kwargs(cfg):
 
 def _run(model, wav_path, cfg):
     segments, _ = model.transcribe(wav_path, **_transcribe_kwargs(cfg))
+    if not cfg.get("vad_filter", True):
+        # Sem VAD, ruído vira frase inventada com confiança baixa (avg_logprob ~-1,4; música ~-0,3).
+        floor = cfg.get("log_prob_threshold", -1.0)
+        segments = [s for s in segments if s.avg_logprob >= floor]
     return " ".join(s.text.strip() for s in segments).strip()
 
 
@@ -207,10 +211,8 @@ class Transcriber:
 
         try:
             text = self._clean(self._transcribe_internal(wav_path))
-            if not text and wav_path != original_path:
-                # O RNNoise apaga música, e voz cantada vai junto: sem nada, tenta o áudio original.
-                _debug_log("Nada após o RNNoise; transcrevendo o áudio original")
-                text = self._clean(self._transcribe_internal(original_path))
+            if not text and denoise:
+                text = self._second_pass(original_path)
             return text
         finally:
             if wav_path != original_path and os.path.exists(wav_path):
@@ -219,6 +221,20 @@ class Transcriber:
                 except OSError:
                     pass
 
+    def _second_pass(self, wav_path):
+        """Nada na passada normal: tenta de novo sem os filtros que derrubam música.
+
+        O RNNoise apaga a música e o vocal junto; o VAD (Silero) não vê voz cantada como fala;
+        o idioma fixo transforma letra em inglês em lixo ("Tchau, tchau."). Sem esses filtros,
+        ruído vira frase inventada: _run corta segmentos de confiança baixa e aqui só valem 4+ palavras
+        (alucinação curta como "Thank you." vem com confiança alta).
+        """
+        # ponytail: corte por nº de palavras; se ruído longo passar, usar no_speech_prob dos segmentos
+        cfg = dict(self.config, language="auto", initial_prompt="", vad_filter=False)
+        text = self._clean(self._transcribe_internal(wav_path, cfg))
+        _debug_log(f"2ª passada (sem RNNoise/VAD, idioma automático): {text!r}")
+        return text if len(text.split()) >= 4 else ""
+
     @staticmethod
     def _clean(text):
         if is_hallucination(text):
@@ -226,8 +242,9 @@ class Transcriber:
             return ""
         return text
 
-    def _transcribe_internal(self, wav_path):
+    def _transcribe_internal(self, wav_path, cfg=None):
         """Lógica interna de transcrição (Daemon / Local)."""
+        cfg = cfg or self.config
 
         if self.use_daemon:
             try:
@@ -236,8 +253,8 @@ class Transcriber:
                 s.connect(DAEMON_SOCKET)
 
                 keys = ("model", "language", "initial_prompt", "no_speech_threshold",
-                        "log_prob_threshold", "compression_ratio_threshold")
-                req = {"action": "transcribe", "wav_path": wav_path, **{k: self.config[k] for k in keys if k in self.config}}
+                        "log_prob_threshold", "compression_ratio_threshold", "vad_filter")
+                req = {"action": "transcribe", "wav_path": wav_path, **{k: cfg[k] for k in keys if k in cfg}}
                 s.sendall(json.dumps(req).encode('utf-8'))
 
 
@@ -266,7 +283,7 @@ class Transcriber:
             self._load_model()
 
         try:
-            return _run(self.model, wav_path, self.config)
+            return _run(self.model, wav_path, cfg)
         except Exception as e:
             if self._device != "cuda":
                 return ""
@@ -275,7 +292,7 @@ class Transcriber:
                 from faster_whisper import WhisperModel
                 self.model = WhisperModel(self.config["model"], device="cpu", compute_type="int8")
                 self._device = "cpu"
-                return _run(self.model, wav_path, self.config)
+                return _run(self.model, wav_path, cfg)
             except Exception:
                 return ""
 

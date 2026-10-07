@@ -17,18 +17,27 @@ def test_rnnoise_resolves_repo_model():
 
 
 def test_singing_survives_rnnoise():
-    """RNNoise apaga voz cantada (música no celular): sem texto, transcreve o áudio original."""
+    """Música: RNNoise/VAD apagam a voz cantada → 2ª passada sem filtros, idioma automático, 4+ palavras."""
     import tempfile
     t = transcribe.Transcriber.__new__(transcribe.Transcriber)
-    t.config = {"noise_suppression": True}
+    t.config = {"noise_suppression": True, "language": "pt", "initial_prompt": "Incoterms"}
     seen = []
     t._denoise_file = lambda p: p + ".denoised.wav"
-    t._transcribe_internal = lambda p: seen.append(p) or ("" if p.endswith(".denoised.wav") else "I think I love you")
+
+    def fake(reply):
+        def run(p, cfg=None):
+            seen.append((p, cfg))
+            return reply if cfg else ""
+        return run
     with tempfile.NamedTemporaryFile(suffix=".wav") as f:
-        assert t.transcribe_file(f.name) == "I think I love you"
-        assert seen == [f.name + ".denoised.wav", f.name]
+        t._transcribe_internal = fake("I think I love you, baby")
+        assert t.transcribe_file(f.name) == "I think I love you, baby"
+        p, cfg = seen[-1]
+        assert p == f.name and cfg["vad_filter"] is False and cfg["language"] == "auto" and not cfg["initial_prompt"]
+        t._transcribe_internal = fake("Thank you.")       # ruído puro: alucinação curta não passa
+        assert t.transcribe_file(f.name) == ""
         seen.clear()
-        t._transcribe_internal = lambda p: seen.append(p) or "Olá, tudo bem?"
+        t._transcribe_internal = lambda p, cfg=None: seen.append(p) or "Olá, tudo bem?"
         assert t.transcribe_file(f.name) == "Olá, tudo bem?" and len(seen) == 1  # fala normal: uma passada só
 
 

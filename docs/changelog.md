@@ -18,7 +18,7 @@
 5. **config.json corrompido impedia o app de abrir:** usa os padrões e registra no log.
 6. **Opção de linha de comando com erro de digitação começava a gravar:** agora mostra a ajuda.
 7. O microfone fecha durante a transcrição e a revisão; o switch do serviço não trava mais os Ajustes.
-8. **Música/voz cantada sumia:** o RNNoise apaga música e leva o vocal junto; se o áudio filtrado não der texto, o original é transcrito.
+8. **Música/voz cantada sumia:** o RNNoise apaga música (e o vocal junto), o VAD não vê canto como fala e o idioma fixo estraga letra em outra língua. Se a passada normal não der texto, uma 2ª passada no áudio original roda sem esses filtros, com idioma automático, aceitando só segmentos confiáveis e 4+ palavras (ruído continua descartado).
 9. **Alucinações do Whisper em ruído** ("…receber notificações de novos vídeos", "Legendas pela comunidade Amara.org") eram coladas: agora são descartadas.
 10. O instalador reaproveita o ambiente Python numa atualização (não baixa o faster-whisper de novo).
 
