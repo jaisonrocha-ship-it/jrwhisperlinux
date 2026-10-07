@@ -41,6 +41,18 @@ def test_singing_survives_rnnoise():
         assert t.transcribe_file(f.name) == "Olá, tudo bem?" and len(seen) == 1  # fala normal: uma passada só
 
 
+def test_auto_language_only_pt_or_en():
+    """'auto' livre chutava turco em trecho curto; agora escolhe o mais provável entre os permitidos."""
+    import faster_whisper
+    faster_whisper.decode_audio = lambda p: p
+
+    class Model:
+        def detect_language(self, audio):
+            return "tr", 0.4, [("tr", 0.4), ("en", 0.3), ("pt", 0.2)]
+    assert transcribe._pick_language(Model(), "x.wav", ["pt", "en"]) == "en"
+    assert transcribe._pick_language(Model(), "x.wav", ["pt"]) == "pt"
+
+
 def test_prebuffer_without_wait_overlap():
     cap = audio.AudioCapture("@DEFAULT_SOURCE@", sr=16000)
     chunk_a = b"\x00\x10" * 512  # 1024 bytes, like parec
@@ -70,7 +82,7 @@ def test_prebuffer_without_wait_overlap():
 
 def run_tests():
     failed = False
-    for fn in (test_rnnoise_resolves_repo_model, test_singing_survives_rnnoise, test_prebuffer_without_wait_overlap):
+    for fn in (test_rnnoise_resolves_repo_model, test_singing_survives_rnnoise, test_auto_language_only_pt_or_en, test_prebuffer_without_wait_overlap):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")

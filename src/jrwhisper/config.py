@@ -20,6 +20,7 @@ PARTIAL_WAV = os.path.join(RUNTIME_DIR, "dictate_partial.wav")
 DEFAULT_CONFIG = {
     "model": "medium",
     "language": "pt",
+    "auto_languages": ["pt", "en"],  # "auto" escolhe só entre estes
     "sample_rate": 16000,
     "mic_device": "@DEFAULT_SOURCE@",
     "silence_threshold": 0,

@@ -11,7 +11,7 @@
 * **Pausa música e vídeos ao ditar** (MPRIS: navegador, Spotify, VLC…) e retoma depois. Com música tocando, o mic ouvia as caixas de som como fala: o ditado não encerrava, a letra aparecia na tela e o Whisper alucinava.
 
 ### Bugs resolvidos
-1. **Idioma "Detectar automaticamente" não transcrevia nada:** o faster-whisper recusa `"auto"`; agora vira detecção de verdade.
+1. **Idioma "Detectar automaticamente" não transcrevia nada:** o faster-whisper recusa `"auto"`. Agora detecta só entre português e inglês (`auto_languages`): livre, chutava turco em trechos curtos.
 2. **Comandos de voz duplicavam pontuação:** "Olá vírgula, tudo bem ponto final." saía "Olá,, tudo bem.." e "Nova linha." perdia a quebra de linha.
 3. **Resposta inesperada da IA (200 sem JSON) derrubava o ditado:** agora cola o texto original.
 4. **"Copiar" do histórico sumia ao fechar a janela:** usa xclip/wl-copy, que persistem.

@@ -114,8 +114,21 @@ def _transcribe_kwargs(cfg):
     )
 
 
+def _pick_language(model, wav_path, allowed):
+    """Idioma "automático" só entre os que você usa: livre, o Whisper chuta entre 99 a cada trecho
+    curto ("artı tutarlar düzgün" para português falado com música atrás)."""
+    from faster_whisper import decode_audio
+    _lang, _p, probs = model.detect_language(decode_audio(wav_path))
+    probs = dict(probs)
+    return max(allowed, key=lambda lang: probs.get(lang, 0.0))
+
+
 def _run(model, wav_path, cfg):
-    segments, _ = model.transcribe(wav_path, **_transcribe_kwargs(cfg))
+    kwargs = _transcribe_kwargs(cfg)
+    if kwargs["language"] is None and cfg.get("auto_languages"):
+        kwargs["language"] = _pick_language(model, wav_path, cfg["auto_languages"])
+        _debug_log(f"Idioma detectado: {kwargs['language']}")
+    segments, _ = model.transcribe(wav_path, **kwargs)
     if not cfg.get("vad_filter", True):
         # Sem VAD, ruído vira frase inventada com confiança baixa (avg_logprob ~-1,4; música ~-0,3).
         floor = cfg.get("log_prob_threshold", -1.0)
@@ -253,7 +266,7 @@ class Transcriber:
                 s.connect(DAEMON_SOCKET)
 
                 keys = ("model", "language", "initial_prompt", "no_speech_threshold",
-                        "log_prob_threshold", "compression_ratio_threshold", "vad_filter")
+                        "log_prob_threshold", "compression_ratio_threshold", "vad_filter", "auto_languages")
                 req = {"action": "transcribe", "wav_path": wav_path, **{k: cfg[k] for k in keys if k in cfg}}
                 s.sendall(json.dumps(req).encode('utf-8'))
 

@@ -394,7 +394,7 @@ class SettingsWindow(Gtk.Window):
         self._shortcut_row(lb, "Atalho de ditado", "Toque para ditar; aperte de novo para encerrar e transcrever.",
                            "Dictate", DICTATE_CMD)
         t.choice_row(lb, "Idioma", None, [("pt", "Português"), ("en", "Inglês"), ("es", "Espanhol"),
-                                          ("auto", "Detectar automaticamente")],
+                                          ("auto", "Detectar (português ou inglês)")],
                      self.config.get("language", "pt"), lambda v: self.set("language", v))
         t.switch_row(lb, "Sons de início e fim", "Um toque discreto ao começar a ouvir e ao colar.",
                      self.config.get("sounds"), lambda v: self.set("sounds", v))
