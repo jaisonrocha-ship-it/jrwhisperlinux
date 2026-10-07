@@ -116,6 +116,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.box_h = 0.0
         self._final_text = ""
         self.dictate_thread = None
+        self.on_handoff = None   # chamado quando a engrenagem transforma o processo em Ajustes
         self._last_frame = None
         self.choices = None      # (modos, selecionado, callback) enquanto espera a escolha
         self.choices_busy = False
@@ -299,6 +300,8 @@ class WhisperFlowOverlay(Gtk.Window):
         _debug_log("Settings icon clicked: opening SettingsWindow")
         if self.dictate_thread:
             self.dictate_thread.cancelled = True
+        if self.on_handoff:
+            self.on_handoff()  # este processo agora é só os Ajustes: o atalho volta a iniciar ditados
         from .settings import SettingsWindow  # import tardio: não pesa na abertura do overlay
         SettingsWindow(load_config()).show_all()
         self.destroy()

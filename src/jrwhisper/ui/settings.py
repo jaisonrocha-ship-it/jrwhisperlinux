@@ -548,6 +548,16 @@ class SettingsWindow(Gtk.Window):
         t.choice_row(lb, "Modelo Whisper", None, models, self.config.get("model", "medium"),
                      lambda v: self.set("model", v))
 
+        lb = t.group(box, "Legendas ao vivo",
+                     "Legenda o som do computador (vídeo em inglês, chinês, russo…) enquanto toca, traduzida. "
+                     "Inglês é traduzido pelo próprio Whisper, no seu computador; os outros idiomas usam o "
+                     "provedor da aba Inteligência. No fim, a legenda inteira fica copiada.")
+        t.choice_row(lb, "Legendar em", None, [("pt", "Português"), ("en", "Inglês"), ("es", "Espanhol"),
+                                               ("", "Idioma original (sem traduzir)")],
+                     self.config.get("caption_language", "pt"), lambda v: self.set("caption_language", v))
+        self._shortcut_row(lb, "Atalho das legendas", "Toque para começar; de novo para encerrar.",
+                           "Dictate: legendas", f"{DICTATE_CMD} --captions")
+
         lb = t.group(box, "Vocabulário", "Nomes, siglas e jargões que o Whisper deve reconhecer, separados por vírgula.")
         r = Gtk.ListBoxRow()
         r.set_activatable(False)

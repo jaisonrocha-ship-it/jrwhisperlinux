@@ -52,9 +52,9 @@ def _strip_reasoning(text):
     return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip().strip('"“”').strip()
 
 
-def complete(config, instruction, text, timeout=None):
+def complete(config, instruction, text, timeout=None, system=SYSTEM):
     timeout = timeout or float(config.get("ai_timeout", 8.0))
-    messages = [{"role": "system", "content": f"{SYSTEM}\n\nInstrução: {instruction}"},
+    messages = [{"role": "system", "content": f"{system}\n\nInstrução: {instruction}"},
                 {"role": "user", "content": text}]
     try:
         if config.get("ai_provider") == "ollama":

@@ -449,7 +449,7 @@ def is_running():
         return False
 
 
-def run_overlay_mode(config, mode=None):
+def run_overlay_mode(config, mode=None, captions=False):
     lock_file = PID_FILE + ".lock"
     lock_fd = open(lock_file, 'w')
     try:
@@ -469,6 +469,20 @@ def run_overlay_mode(config, mode=None):
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
 
+    def release():
+        """Solta a trava do ditado (idempotente). Também quando a engrenagem abre os Ajustes neste
+        processo: senão o atalho só mandaria "2º toque" para uma sessão já cancelada."""
+        try:
+            with open(PID_FILE) as f:
+                mine = f.read().strip() == str(os.getpid())
+            if mine:  # nunca apaga o PID de uma sessão nova que já pegou a trava
+                os.remove(PID_FILE)
+        except (OSError, ValueError):
+            pass
+        if not lock_fd.closed:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+
     # GLib.unix_signal_add: o sinal acorda o laço do GTK direto (handler Python pode atrasar)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: Gtk.main_quit() or True)
 
@@ -481,11 +495,17 @@ def run_overlay_mode(config, mode=None):
         except Exception:
             active_win = None
 
-        overlay = WhisperFlowOverlay(config)
+        if captions:  # legendas: o texto sempre aparece e não há revisão com IA
+            from .captions import CaptionThread
+            overlay = WhisperFlowOverlay(dict(config, overlay_show_text=True, ai_enabled=False))
+            thread = CaptionThread(overlay, config)
+        else:
+            overlay = WhisperFlowOverlay(config)
+            thread = DictateThread(overlay, config, active_win=active_win, wm_class=window_class(active_win),
+                                   mode=mode)
         overlay.show_all()
-
-        thread = DictateThread(overlay, config, active_win=active_win, wm_class=window_class(active_win), mode=mode)
         overlay.dictate_thread = thread
+        overlay.on_handoff = release
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, lambda: thread.hotkey() or True)
         thread.start()
 
@@ -494,9 +514,4 @@ def run_overlay_mode(config, mode=None):
         thread.restore_audio()
 
     finally:
-        try:
-            os.remove(PID_FILE)
-        except OSError:
-            pass
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        lock_fd.close()
+        release()

@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "model": "medium",
     "language": "pt",
     "auto_languages": ["pt", "en"],  # "auto" escolhe só entre estes
+    "caption_language": "pt",        # legendas ao vivo traduzem para este ("" = idioma original)
     "sample_rate": 16000,
     "mic_device": "@DEFAULT_SOURCE@",
     "silence_threshold": 0,

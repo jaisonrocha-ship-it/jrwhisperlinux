@@ -7,6 +7,8 @@
 * **Reescrita com IA** (NVIDIA NIM ou Ollama), **perfis por aplicativo**, **atalhos de texto**, **histórico** com busca estilo Spotlight, **push-to-talk** e **mãos livres**.
 * **Revisão com IA:** o texto espera na tela; corrigir palavra com um clique, trocar de modo, colar, copiar ou descartar. Teclado: Enter cola, Esc descarta, Ctrl+C copia, 1–9 trocam o modo. Texto longo rola com a roda do mouse.
 * **2º toque no atalho encerra e transcreve** (antes cancelava e descartava o áudio). Na revisão, cola; antes de falar, cancela.
+* **Legendas ao vivo traduzidas** (`dictate --captions`): o som do computador é cortado em frases nas pausas, transcrito com detecção de idioma livre (travada após 2 frases iguais) e traduzido em paralelo; em inglês o próprio Whisper traduz. Medido: 0,6–2,1 s entre o fim da frase e a legenda (en/ru → pt/en).
+* **Engrenagem durante um ditado deixava o atalho mudo** enquanto os Ajustes ficassem abertos (a trava do ditado continuava presa): agora é solta.
 * **Som do computador como entrada** (`dictate --system` ou Ajustes → Microfone): transcreve vídeo/reunião direto da saída de áudio (`@DEFAULT_MONITOR@`), sem calibrar, pausar mídia, abaixar volume nem RNNoise; termina no 2º toque ou na duração máxima.
 * **Trocar o modelo não exige reiniciar o serviço:** o daemon recarrega no próximo ditado.
 * **Pausa música e vídeos ao ditar** (MPRIS: navegador, Spotify, VLC…) e retoma depois. Com música tocando, o mic ouvia as caixas de som como fala: o ditado não encerrava, a letra aparecia na tela e o Whisper alucinava.

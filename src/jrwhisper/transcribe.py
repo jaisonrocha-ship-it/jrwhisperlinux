@@ -111,6 +111,7 @@ def _transcribe_kwargs(cfg):
         compression_ratio_threshold=cfg.get("compression_ratio_threshold", 2.4),
         condition_on_previous_text=False,
         temperature=0.0,
+        task=cfg.get("task") or "transcribe",  # "translate": o próprio Whisper traduz para inglês
     )
 
 
@@ -124,16 +125,17 @@ def _pick_language(model, wav_path, allowed):
 
 
 def _run(model, wav_path, cfg):
+    """(texto, idioma falado)."""
     kwargs = _transcribe_kwargs(cfg)
     if kwargs["language"] is None and cfg.get("auto_languages"):
         kwargs["language"] = _pick_language(model, wav_path, cfg["auto_languages"])
         _debug_log(f"Idioma detectado: {kwargs['language']}")
-    segments, _ = model.transcribe(wav_path, **kwargs)
+    segments, info = model.transcribe(wav_path, **kwargs)
     if not cfg.get("vad_filter", True):
         # Sem VAD, ruído vira frase inventada com confiança baixa (avg_logprob ~-1,4; música ~-0,3).
         floor = cfg.get("log_prob_threshold", -1.0)
         segments = [s for s in segments if s.avg_logprob >= floor]
-    return " ".join(s.text.strip() for s in segments).strip()
+    return " ".join(s.text.strip() for s in segments).strip(), info.language
 
 
 class Transcriber:
@@ -141,6 +143,7 @@ class Transcriber:
         self.config = config
         self.model = None
         self._device = None
+        self.last_language = None  # idioma detectado na última transcrição
         self.use_daemon = self._check_daemon_alive()
         if not self.use_daemon:
             _debug_log("Daemon não detectado. Carregando modelo localmente (fallback)...")
@@ -266,7 +269,7 @@ class Transcriber:
                 s.connect(DAEMON_SOCKET)
 
                 keys = ("model", "language", "initial_prompt", "no_speech_threshold",
-                        "log_prob_threshold", "compression_ratio_threshold", "vad_filter", "auto_languages")
+                        "log_prob_threshold", "compression_ratio_threshold", "vad_filter", "auto_languages", "task")
                 req = {"action": "transcribe", "wav_path": wav_path, **{k: cfg[k] for k in keys if k in cfg}}
                 s.sendall(json.dumps(req).encode('utf-8'))
 
@@ -281,6 +284,7 @@ class Transcriber:
 
                 resp = json.loads(b''.join(data).decode('utf-8'))
                 if "text" in resp:
+                    self.last_language = resp.get("language")
                     return resp["text"].strip()
                 else:
                     _debug_log(f"Erro do daemon: {resp.get('error')}")
@@ -296,7 +300,8 @@ class Transcriber:
             self._load_model()
 
         try:
-            return _run(self.model, wav_path, cfg)
+            text, self.last_language = _run(self.model, wav_path, cfg)
+            return text
         except Exception as e:
             if self._device != "cuda":
                 return ""
@@ -305,7 +310,8 @@ class Transcriber:
                 from faster_whisper import WhisperModel
                 self.model = WhisperModel(self.config["model"], device="cpu", compute_type="int8")
                 self._device = "cpu"
-                return _run(self.model, wav_path, cfg)
+                text, self.last_language = _run(self.model, wav_path, cfg)
+                return text
             except Exception:
                 return ""
 
@@ -420,10 +426,10 @@ def run_daemon(config):
                         _debug_log(f"Daemon: modelo '{want}' falhou ({ex}); mantendo '{loaded}'")
                         model = load(loaded)
                 try:
-                    text = _run(model, wav_path, req)
+                    text, language = _run(model, wav_path, req)
                     t1 = time.time()
                     _debug_log(f"Daemon: Sucesso em {t1-t0:.2f}s -> {text[:100]}")
-                    conn.sendall(json.dumps({"text": text}).encode('utf-8'))
+                    conn.sendall(json.dumps({"text": text, "language": language}).encode('utf-8'))
                 except Exception as ex:
                     _debug_log(f"Daemon: Erro de transcrição: {ex}")
                     conn.sendall(json.dumps({"error": str(ex)}).encode('utf-8'))

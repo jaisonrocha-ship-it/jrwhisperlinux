@@ -6,7 +6,8 @@ USO:
   dictate --settings / -s [aba] → Ajustes (abas: general, appearance, microphone, recognition,
                                   text, ai, apps, history, handsfree, advanced)
   dictate --mode <id>           → Dita já com um modo de IA (corrigir, email, mensagem, ingles, topicos)
-  dictate --system              → Transcreve o som do computador (vídeo, reunião); de novo: encerra
+  dictate --system              → Transcreve o som do computador (vídeo, reunião) e cola; de novo: encerra
+  dictate --captions            → Legendas ao vivo do som do computador, traduzidas; de novo: encerra
   dictate --history             → Busca rápida no histórico (Enter cola)
   dictate --calibrate           → Mede ruído e voz, diagnostica o mic e salva o limiar
   dictate --calibrate-gui       → Mesma calibração em janela, com medidor ao vivo
@@ -132,6 +133,8 @@ def main():
     elif arg == "--system":
         from .audio import SYSTEM_AUDIO
         run_overlay_mode(dict(config, mic_device=SYSTEM_AUDIO))
+    elif arg == "--captions":
+        run_overlay_mode(config, captions=True)
     elif arg == "--history":
         from .ui.history_search import HistorySearch
         HistorySearch(config).show_all()
