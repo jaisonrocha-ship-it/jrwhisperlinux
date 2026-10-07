@@ -1,6 +1,28 @@
 # Changelog — JRWhisperLinux
 
-## v3.2 — 2026-07-03 (Estável / Atual)
+## v4.0 — 2026-10-07 (Estável / Atual)
+
+### Novidades (desde a v3.2)
+* **Redesign estilo macOS:** Ajustes com 10 abas e aplicação instantânea, overlay com Orbe de plasma, Ondas ou Barras, calibração guiada por microfone, ícone do app na dock.
+* **Reescrita com IA** (NVIDIA NIM ou Ollama), **perfis por aplicativo**, **atalhos de texto**, **histórico** com busca estilo Spotlight, **push-to-talk** e **mãos livres**.
+* **Revisão com IA:** o texto espera na tela; corrigir palavra com um clique, trocar de modo, colar, copiar ou descartar. Teclado: Enter cola, Esc descarta, Ctrl+C copia, 1–9 trocam o modo. Texto longo rola com a roda do mouse.
+* **2º toque no atalho encerra e transcreve** (antes cancelava e descartava o áudio). Na revisão, cola; antes de falar, cancela.
+* **Trocar o modelo não exige reiniciar o serviço:** o daemon recarrega no próximo ditado.
+
+### Bugs resolvidos
+1. **Idioma "Detectar automaticamente" não transcrevia nada:** o faster-whisper recusa `"auto"`; agora vira detecção de verdade.
+2. **Comandos de voz duplicavam pontuação:** "Olá vírgula, tudo bem ponto final." saía "Olá,, tudo bem.." e "Nova linha." perdia a quebra de linha.
+3. **Resposta inesperada da IA (200 sem JSON) derrubava o ditado:** agora cola o texto original.
+4. **"Copiar" do histórico sumia ao fechar a janela:** usa xclip/wl-copy, que persistem.
+5. **config.json corrompido impedia o app de abrir:** usa os padrões e registra no log.
+6. **Opção de linha de comando com erro de digitação começava a gravar:** agora mostra a ajuda.
+7. O microfone fecha durante a transcrição e a revisão; o switch do serviço não trava mais os Ajustes.
+8. **Alucinações do Whisper em ruído** ("…receber notificações de novos vídeos", "Legendas pela comunidade Amara.org") eram coladas: agora são descartadas.
+9. O instalador reaproveita o ambiente Python numa atualização (não baixa o faster-whisper de novo).
+
+---
+
+## v3.2 — 2026-07-03
 
 ### Funcionalidades & Otimizações
 * **Limpeza e Refatoração de Código:** Remoção de comentários redundantes e estruturação limpa do código principal para conformidade open-source.

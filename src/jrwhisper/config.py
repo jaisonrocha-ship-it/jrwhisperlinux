@@ -146,9 +146,13 @@ CALIBRATION_VERDICTS = {
 
 def load_config():
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    if os.path.exists(CONFIG_FILE):
+    try:
         with open(CONFIG_FILE) as f:
             return {**DEFAULT_CONFIG, **json.load(f)}
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as e:  # config corrompido não pode impedir o ditado
+        _debug_log(f"config.json ilegível ({e}); usando os padrões")
     return dict(DEFAULT_CONFIG)
 
 

@@ -1,3 +1,4 @@
+import queue
 import random
 import sys
 import os
@@ -13,9 +14,9 @@ from gi.repository import Gtk, GLib
 from .audio import AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume, is_yeti, resolve_mic, set_volume, yeti_hw_problem
 from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
-from .paste import paste_text
+from .paste import copy_text, paste_text
 from .profiles import window_class
-from . import history, pipeline, ptt
+from . import ai, history, pipeline, ptt
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -51,6 +52,21 @@ class DictateThread(threading.Thread):
         self.transcriber = None
         self.original_volume = None
         self.pasted = False
+        # waiting (nada dito) | listening | busy (transcrevendo/IA) | choosing (revisão com IA)
+        self.stage = "waiting"
+        self.finish_now = False   # 2º toque ouvindo: encerra o trecho e transcreve
+        self.stop_after = False   # ...e não volta a ouvir (mãos livres)
+
+    def hotkey(self):
+        """2º toque no atalho (SIGUSR1, roda na thread GTK): nunca descarta o que já foi dito."""
+        _debug_log(f"Atalho de novo ({self.stage})")
+        if self.stage == "listening":
+            self.finish_now = self.stop_after = True
+        elif self.stage == "choosing":
+            self.overlay.pick("paste")
+        elif self.stage == "waiting":
+            Gtk.main_quit()
+        return False
 
     def _run_partial_transcription(self, audio_snapshot, sr):
         try:
@@ -59,7 +75,7 @@ class DictateThread(threading.Thread):
                 wf.setsampwidth(2)
                 wf.setframerate(sr)
                 wf.writeframes((audio_snapshot * 32767).astype(np.int16).tobytes())
-            
+
             text = self.transcriber.transcribe_file(PARTIAL_WAV, denoise=False)
             if text and self.recording_active:
                 if self.config.get("enable_formatting", True):
@@ -72,6 +88,9 @@ class DictateThread(threading.Thread):
 
     def _cleanup_gtk(self):
         """Inicia o fade-out do overlay e encerra o GTK."""
+        if self.cancelled:  # engrenagem: o overlay já fechou e os Ajustes são donos do laço do GTK
+            return
+
         def _done():
             self.overlay.destroy()
             Gtk.main_quit()
@@ -146,11 +165,14 @@ class DictateThread(threading.Thread):
                 if self.cancelled:
                     _debug_log("DictateThread cancelada pelo usuário (configurações abertas). Abortando.")
                     return
+                last = push_to_talk or not handsfree or not started or self.stop_after
+                if last:
+                    capture.stop()  # o mic não fica aberto durante a transcrição e a revisão
 
                 stop = self._finish_segment(audio, started, peak_rms, threshold, mic, sr, handsfree)
                 segment += 1
-                # Mãos livres segue até a frase de parada, um silêncio longo ou o atalho (SIGTERM).
-                if push_to_talk or not handsfree or stop or not started:
+                # Mãos livres segue até a frase de parada, um silêncio longo ou o 2º toque no atalho.
+                if last or stop or self.stop_after:
                     break
                 timeout = self.config.get("handsfree_idle_secs", 20)
                 time.sleep(0.6)
@@ -192,6 +214,7 @@ class DictateThread(threading.Thread):
         peak_rms = 0.0
         last_partial_time = time.time()
         self.recording_active = True
+        self.stage = "listening" if started else "waiting"
 
         while not self.cancelled:
             time.sleep(TICK_INTERVAL)
@@ -211,6 +234,7 @@ class DictateThread(threading.Thread):
                 speech_confirm_ticks += 1
                 if not started and speech_confirm_ticks >= SPEECH_START_TICKS:
                     started = True
+                    self.stage = "listening"
                     GLib.idle_add(self.overlay.update_status, "Ouvindo...", "status-listening")
                     pre_audio = capture.take_pre_buffer_clear_live()
                     if len(pre_audio) > 0:
@@ -222,6 +246,9 @@ class DictateThread(threading.Thread):
                 if started:
                     silence_counter += 1
 
+            if self.finish_now:
+                _debug_log(f"Atalho: encerrando após {now - recording_start:.1f}s")
+                break
             if keys is None:
                 if not started and (now - recording_start) > timeout:
                     _debug_log(f"Timeout: {timeout}s sem fala")
@@ -249,6 +276,8 @@ class DictateThread(threading.Thread):
                                      args=(np.copy(all_audio), sr), daemon=True).start()
 
         self.recording_active = False
+        self.stage = "busy"
+        self.finish_now = False
         final_audio = capture.get_audio_float32() if started else np.array([], dtype=np.float32)
         if len(final_audio) > 0:
             all_audio = np.concatenate([all_audio, final_audio])
@@ -295,6 +324,9 @@ class DictateThread(threading.Thread):
         result = pipeline.process(
             self.config, raw_text, wm_class=self.wm_class, forced_mode=self.mode,
             on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+        if self.config.get("ai_enabled") and not handsfree:
+            self._choose(raw_text, result)
+            return stop
         final_text = result.text
         if handsfree and self.pasted:
             final_text = " " + final_text  # trechos seguidos não grudam
@@ -311,6 +343,59 @@ class DictateThread(threading.Thread):
             status = "Texto colado!"
         GLib.idle_add(self.overlay.update_status, status, "status-success")
         return stop
+
+    def _choose(self, raw_text, result):
+        """IA ligada: o texto fica na tela com opções (reescrever, colar, copiar, descartar) até a escolha."""
+        self.restore_volume()  # ninguém revisa texto com o som abafado
+        modes = ai.enabled_modes(self.config)
+        # Prefixo de voz já foi usado na 1ª passada; ao trocar de modo, vale o botão.
+        body = ai.detect_voice_mode(self.config, raw_text)[1] if self.config.get("ai_voice_prefix", True) else raw_text
+        picks = queue.Queue()
+        selected = result.mode["id"] if result.mode else "original"
+
+        def offer(res, sel):
+            status = "IA falhou · texto original" if res.ai_error else "Enter cola · Esc descarta · clique para corrigir"
+            GLib.idle_add(self.overlay.update_status, status, "status-error" if res.ai_error else "status-waiting")
+            GLib.idle_add(self.overlay.show_choices, res.text, modes, sel, picks.put)
+
+        offer(result, selected)
+        self.stage = "choosing"
+        while not self.cancelled:
+            try:
+                action = picks.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if action in ("paste", "copy"):
+                result.text = self.overlay.get_final_text() or result.text  # com as palavras corrigidas
+            if action == "paste":
+                paste_text(result.text, self.active_win, result.config.get("paste_method", "ctrl+v"))
+                self.pasted = True
+                self._remember(raw_text, result)
+                done = f"Colado · {result.mode['name']}" if result.mode else "Texto colado"
+            elif action == "copy":
+                copy_text(result.text)
+                self._remember(raw_text, result)
+                done = "Copiado"
+            elif action == "discard":
+                done = "Descartado"
+            else:  # "original" ou id de modo: reprocessa a partir do texto cru (ou do corrigido)
+                src = body
+                if self.overlay.edited:
+                    src = self.overlay.get_final_text()
+                    if selected == "original":
+                        body = src  # correções no texto sem IA viram o novo "Original"
+                src = body if action == "original" else src
+                cfg = dict(self.config, ai_voice_prefix=False, ai_enabled=action != "original")
+                result = pipeline.process(
+                    cfg, src, wm_class=self.wm_class, forced_mode=None if action == "original" else action,
+                    on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+                selected = action if result.mode or action == "original" else selected
+                offer(result, selected)
+                continue
+            self.stage = "busy"
+            GLib.idle_add(self.overlay.hide_choices)
+            GLib.idle_add(self.overlay.update_status, done, "status-error" if action == "discard" else "status-success")
+            return
 
     def restore_volume(self):
         vol, self.original_volume = self.original_volume, None
@@ -346,37 +431,27 @@ def is_running():
 
 
 def run_overlay_mode(config, mode=None):
-
     lock_file = PID_FILE + ".lock"
     lock_fd = open(lock_file, 'w')
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (BlockingIOError, OSError):
-
+        # Já há um ditado: este toque é o "2º toque" (encerra e transcreve, cola ou cancela).
         try:
             with open(PID_FILE) as f:
                 pid = int(f.read().strip())
             if _is_dictate_process(pid):
-                os.kill(pid, signal.SIGTERM)
-                for _ in range(50):
-                    try:
-                        os.kill(pid, 0)
-                    except OSError:
-                        break
-                    time.sleep(0.1)
+                os.kill(pid, signal.SIGUSR1)
         except (OSError, ValueError):
             pass
         lock_fd.close()
         sys.exit(0)
 
-
     with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
 
-
-    def _sigterm_handler(signum, frame):
-        GLib.idle_add(Gtk.main_quit)
-    signal.signal(signal.SIGTERM, _sigterm_handler)
+    # GLib.unix_signal_add: o sinal acorda o laço do GTK direto (handler Python pode atrasar)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: Gtk.main_quit() or True)
 
     try:
         # Captura janela ativa ANTES de mostrar o overlay
@@ -392,6 +467,7 @@ def run_overlay_mode(config, mode=None):
 
         thread = DictateThread(overlay, config, active_win=active_win, wm_class=window_class(active_win), mode=mode)
         overlay.dictate_thread = thread
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, lambda: thread.hotkey() or True)
         thread.start()
 
         Gtk.main()

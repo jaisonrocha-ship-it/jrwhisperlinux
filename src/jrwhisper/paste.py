@@ -21,6 +21,15 @@ def _type_x11(text, active_win):
     subprocess.run(cmd + ["--", text], timeout=10)
 
 
+def copy_text(text):
+    """Só copia para a área de transferência (sem colar)."""
+    cmd = ["wl-copy"] if get_display_server() == "wayland" else ["xclip", "-selection", "clipboard"]
+    try:
+        subprocess.run(cmd, input=text.encode("utf-8"), timeout=3)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        _debug_log(f"Falha ao copiar: {e}")
+
+
 def paste_text(text, active_win, method="ctrl+v"):
     """Cola na janela ativa. method: ctrl+v | ctrl+shift+v (terminais) | type (digita).
 

@@ -35,19 +35,21 @@ JRWhisperLinux captura áudio do microfone, transcreve com um modelo de IA rodan
 Minimalista por padrão: um atalho, um orbe que reage à sua voz, o texto colado onde o cursor está. Os recursos avançados ficam em **Ajustes** (`dictate -s`), cada um com seu próprio interruptor.
 
 ### Essencial
-* **Latência zero:** o modelo Whisper fica carregado na GPU por um serviço (`$XDG_RUNTIME_DIR/dictate_daemon.sock`); a captura começa assim que o atalho é pressionado.
-* **Overlay em três estilos:** Orbe (padrão, anel luminoso com o mic no centro), Ondas ou Barras de espectro. Cor de destaque, tamanho, posição, brilho e "reduzir movimento" ajustáveis, com pré-visualização ao vivo. Aparece no monitor onde está o mouse e não bloqueia cliques.
+* **Um atalho, dois toques:** o primeiro começa a ouvir; o segundo encerra e transcreve na hora (antes de você falar, cancela). Nada do que foi dito se perde.
+* **Latência zero:** o modelo Whisper fica carregado na GPU por um serviço (`$XDG_RUNTIME_DIR/dictate_daemon.sock`); a captura começa assim que o atalho é pressionado. Trocar o modelo nos Ajustes vale no próximo ditado, sem reiniciar nada.
+* **Comandos de voz:** "vírgula", "ponto final", "nova linha", "novo parágrafo"… mesmo quando o Whisper já pontuou o comando, sai uma pontuação só.
+* **Overlay em três estilos:** Orbe (padrão, esfera de plasma com o mic no centro), Ondas ou Barras de espectro. Cor de destaque, tamanho, posição, brilho e "reduzir movimento" ajustáveis, com pré-visualização ao vivo. Aparece no monitor onde está o mouse e não bloqueia cliques.
 * **Isolamento de voz:** RNNoise limpa música, ventilador e teclado antes da transcrição.
 * **Detecção de fala com histerese:** 150 ms para confirmar que você começou e uma pausa configurável para encerrar.
 * **Calibração por microfone:** medidor ao vivo com espectro; cada mic guarda o próprio limiar. Sem o mic preferido, usa o padrão do sistema e avisa.
 
 ### Avançado (Ajustes)
-* **Reescrita com IA:** modos Corrigir, E-mail, Mensagem, Inglês e Tópicos (editáveis). Ative dizendo "modo e-mail, …" no começo, por atalho próprio (`dictate --mode email`) ou por aplicativo. NVIDIA NIM (nuvem) ou Ollama (local). Se a IA falhar, o texto original é colado.
+* **Reescrita com IA:** modos Corrigir, E-mail, Mensagem, Inglês e Tópicos (editáveis). Ative dizendo "modo e-mail, …" no começo, por atalho próprio (`dictate --mode email`) ou por aplicativo. NVIDIA NIM (nuvem) ou Ollama (local). Com a IA ligada, o texto não é colado sozinho: fica na tela, qualquer palavra pode ser corrigida com um clique (Enter confirma, Esc cancela), e há botões para trocar de modo (ou voltar ao original), colar, copiar ou descartar. Pelo teclado: Enter cola, Esc descarta, Ctrl+C copia, 1–9 trocam o modo; o 2º toque no atalho também cola. Texto longo rola com a roda do mouse. No modo mãos livres ele continua colando direto. Se a IA falhar, aparece o texto original.
 * **Perfis por aplicativo:** terminais colam com Ctrl+Shift+V, em minúscula e sem ponto final; chat sem ponto final; e-mail com pontuação completa. Regras editáveis por classe de janela.
 * **Atalhos de texto:** diga "minha assinatura" e o bloco inteiro entra no lugar.
 * **Histórico:** local (0600), com retenção configurável e busca estilo Spotlight (`dictate --history`; Enter cola).
 * **Push-to-talk:** segure o atalho para falar e solte para enviar (X11).
-* **Mãos livres:** depois de colar, volta a ouvir; para com "parar ditado", silêncio longo ou o atalho.
+* **Mãos livres:** depois de colar, volta a ouvir; para com "parar ditado", silêncio longo ou o atalho (que antes transcreve o trecho em andamento).
 
 ## Para quem serve
 

@@ -1,26 +1,5 @@
 #!/usr/bin/env python3
-"""
-WhisperFlow para Linux — Ditado por voz com overlay visual e transcrição instantânea
-faster-whisper + CUDA/CPU + GTK3 overlay
-
-USO: 
-  dictate                      → Inicia overlay de ditado (Super+Shift+V)
-  dictate --settings / -s      → Abre o painel de configurações premium
-  dictate --daemon             → Inicia o daemon persistente do Whisper
-  dictate --status             → Mostra informações e status da ferramenta
-  dictate --calibrate          → Mede ruído e voz, diagnostica o mic e salva o limiar
-  dictate --calibrate-gui      → Mesma calibração em janela, com medidor ao vivo
-
-v3.3 — 2026-07-03
-  • Código limpo livre de comentários internos e estruturado para publicação no GitHub.
-  • Interface de 3 linhas deslizantes com fading de opacidade e altura estática.
-  • Suporte híbrido Wayland e X11.
-  • Isolamento de voz neural integrado com RNNoise via FFmpeg.
-  • Detecção multi-monitor dinâmica baseado na posição do mouse.
-  • Daemon Mode com latência zero e tempo de silêncio otimizado.
-  • Painel de Configurações Premium nativo em GTK3 (--settings / -s).
-"""
-
+"""JRWhisper — ditado por voz local para Linux. Comandos: dictate --help"""
 import sys, os
 
 VENV_PYTHON = os.path.expanduser("~/.local/share/dictation-venv/bin/python3")

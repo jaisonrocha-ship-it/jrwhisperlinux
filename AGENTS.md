@@ -24,8 +24,9 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 |---------|--------|
 | `src/dictate` | Porta de entrada (bootstrap do venv + `jrwhisper.cli.main`) |
 | `src/jrwhisper/` | Pacote. Núcleo: `config`, `audio` (captura, calibração por mic, Yeti), `transcribe` (Whisper/daemon/RNNoise), `dictation` (laço de sessão: PTT, mãos livres), `pipeline` (perfil → modo IA → formatação → IA → atalhos de texto), `textproc`, `paste`, `profiles`, `ai`, `history`, `ptt`, `shortcuts` (dconf), `secrets` (keyring), `cli` |
-| `src/jrwhisper/ui/` | `theme` (tokens macOS, componentes inset-grouped, PopupChoice, Swatch), `visuals` (Orbe/Ondas/Barras + FFT), `overlay` (HUD em Cairo), `settings` (10 abas), `calibration`, `history_search` (Spotlight) |
+| `src/jrwhisper/ui/` | `theme` (tokens macOS, ícone padrão das janelas, componentes inset-grouped, PopupChoice, Swatch), `visuals` (Orbe de plasma/Ondas/Barras + FFT), `overlay` (HUD em Cairo), `settings` (10 abas), `calibration`, `history_search` (Spotlight) |
 | `assets/fonts/` | Inter variável (OFL), instalada pelo `install.sh` |
+| `assets/icons/jrwhisper.svg` | Ícone do app (dock/menu). `install.sh` instala no hicolor + `jrwhisper.desktop` com `StartupWMClass=dictate` (é assim que o Plank casa a janela) |
 | `scripts/install.sh` | One-line installer (curl | bash) |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
@@ -52,11 +53,12 @@ bash scripts/install.sh
 2. **Nunca suavizar RMS** — suavização adiciona latência. Use RMS instantâneo com ticks de confirmação de fala.
 3. **GPU via preload** — CUDA é carregado com `ctypes.cdll.LoadLibrary` do `/opt/resolve/libs/`. Não depende de `libcublas.so.12` no sistema.
 4. **xclip + xdotool** — injeção usa clipboard (`xclip -selection clipboard` + `ctrl+v`) com fallback para `xdotool type --window`.
-5. **Daemon via socket Unix** — `$XDG_RUNTIME_DIR/dictate_daemon.sock` (logs, WAVs e PID também ficam lá, nunca em /tmp). Mantém modelo carregado para latência zero.
+5. **Daemon via socket Unix** — `$XDG_RUNTIME_DIR/dictate_daemon.sock` (logs, WAVs e PID também ficam lá, nunca em /tmp). Mantém modelo carregado para latência zero. Cada requisição leva `model`/`language`/prompt do config (via `transcribe._transcribe_kwargs`); se o modelo mudou, o daemon recarrega sozinho. `language: "auto"` vira `None` (o faster-whisper rejeita "auto").
 6. **Silence detection com histerese** — confirmação de fala 150ms + gap tolerance 2.5s.
 7. **GTK3 threads** — use `GLib.idle_add` para atualizar UI de threads background.
 8. **`os.execv` no bootstrap** — reexecuta o script dentro do venv. Cuidado com `sys.argv`.
 9. **Instalação por symlink** — `~/.local/bin/dictate` aponta para `src/dictate`, que acha o pacote via `realpath`. Nunca copie só o `src/dictate`.
+10. **2º toque no atalho = SIGUSR1** — a segunda instância só sinaliza e sai. `DictateThread.hotkey()` decide pelo `stage`: waiting cancela, listening encerra e transcreve, choosing cola, busy ignora. SIGTERM continua sendo "sair".
 
 ## Pitfalls Conhecidos
 
@@ -103,7 +105,7 @@ ssh jrdev-oracle 'sudo mv /tmp/install.sh /var/www/sites/jrwhisper.jasonrock.dev
 2. **Testes automatizados** — pytest para motor de áudio e VAD
 3. **CI/CD** — GitHub Actions para Ubuntu/Mint/Fedora
 4. **AppIndicator** — ícone na bandeja do sistema
-5. **Config GUI** — painel GTK3 para configurações
+5. ~~Config GUI — painel GTK3 para configurações~~ (Ajustes, out/2026)
 6. **Wayland nativo** — overlay sem XWayland
 7. **Flatpak** — distribuição universal
 

@@ -66,10 +66,24 @@ def run_tests():
         (
             "texto com quebra de linha\n",
             "Texto com quebra de linha."
-        )
+        ),
+        # O Whisper pontua o próprio comando: nada de ",," ".." nem quebra de linha perdida
+        ("Olá vírgula, tudo bem ponto final.", "Olá, tudo bem."),
+        ("Primeira linha. Nova linha. segunda", "Primeira linha.\nSegunda."),
+        ("Isso é ótimo. Ponto de exclamação!", "Isso é ótimo!"),
+        ("o que é isso ponto de interrogação?", "O que é isso?"),
+        ("olá, eh, tudo bem?", "Olá, tudo bem?"),
+        ("Espere... já volto", "Espere... Já volto."),
     ]
     
     failed = False
+    for junk in ("Acesse www.Incoterms.com.br para receber notificações de novos vídeos.",
+                 "Legendas pela comunidade Amara.org", "Obrigado por assistir!"):
+        assert textproc.is_hallucination(junk), junk
+    assert not textproc.is_hallucination("Preciso das notificações de novos vídeos do canal da empresa "
+                                         "para o relatório de marketing de amanhã cedo, por favor, sem falta mesmo.")
+    assert not textproc.is_hallucination("Obrigado pela reunião de hoje.")
+    print("Alucinações: PASSED")
     print("=" * 60)
     print("EXECUTANDO TESTES DO FORMATADOR DE TEXTO IMPORTADO DE DICTATE")
     print("=" * 60)

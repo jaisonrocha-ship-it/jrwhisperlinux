@@ -31,7 +31,7 @@ def _norm(text):
     return "".join(c for c in text if c.isalnum() or c.isspace()).strip()
 
 
-def _key(config):
+def _key():
     key = secrets.get_key("nvidia")
     if not key:
         raise AIError("chave da NVIDIA não configurada (Ajustes → Inteligência)")
@@ -66,14 +66,15 @@ def complete(config, instruction, text, timeout=None):
         else:
             model = config.get("ai_model")
             r = requests.post(f"{NIM_URL}/chat/completions",
-                              headers={"Authorization": f"Bearer {_key(config)}"},
+                              headers={"Authorization": f"Bearer {_key()}"},
                               json={"model": model, "messages": messages, "temperature": 0.2,
                                     "max_tokens": max(256, len(text) * 2), **_no_reasoning(model)},
                               timeout=timeout)
             r.raise_for_status()
             out = r.json()["choices"][0]["message"]["content"] or ""
-    except requests.RequestException as e:
-        raise AIError(str(e)) from e
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        # ValueError/KeyError…: 200 com corpo inesperado; nunca pode derrubar o ditado
+        raise AIError(str(e) or type(e).__name__) from e
     out = _strip_reasoning(out)
     if not out:
         raise AIError("resposta vazia")

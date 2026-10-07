@@ -7,6 +7,7 @@ import time
 import socket
 
 from .config import CONFIG_DIR, DAEMON_PID_FILE, DAEMON_SOCKET, DAEMON_TIMEOUT, RNNOISE_MODEL_NAME, _debug_log
+from .textproc import is_hallucination
 
 
 CUBLAS_SEARCH_PATHS = [
@@ -56,7 +57,7 @@ _cublas_preloaded = False
 
 def _preload_cublas():
     """Pré-carrega libcublas.so.12 e libcublasLt.so.12 via ctypes.
-    
+
     Setar LD_LIBRARY_PATH depois que o processo já iniciou não funciona —
     o linker dinâmico não relê a variável. ctypes.cdll.LoadLibrary() é
     a forma correta de disponibilizar libs para módulos carregados depois.
@@ -64,12 +65,12 @@ def _preload_cublas():
     global _cublas_preloaded
     if _cublas_preloaded:
         return True
-    
+
     import ctypes
     cublas_path = _find_cublas_path()
     if not cublas_path:
         return False
-    
+
     try:
         ctypes.cdll.LoadLibrary(os.path.join(cublas_path, "libcublas.so.12"))
         ctypes.cdll.LoadLibrary(os.path.join(cublas_path, "libcublasLt.so.12"))
@@ -95,6 +96,27 @@ def choose_device(config):
 
     _debug_log(f"CPU: VRAM={free}MB (min={min_vram}MB)")
     return "cpu", "int8"
+
+
+def _transcribe_kwargs(cfg):
+    """Parâmetros do Whisper a partir do config (ou da requisição do daemon, mesmas chaves)."""
+    language = cfg.get("language") or "pt"
+    return dict(
+        beam_size=5,
+        vad_filter=True,
+        language=None if language == "auto" else language,  # None = o Whisper detecta
+        initial_prompt=cfg.get("initial_prompt", ""),
+        no_speech_threshold=cfg.get("no_speech_threshold", 0.6),
+        log_prob_threshold=cfg.get("log_prob_threshold", -1.0),
+        compression_ratio_threshold=cfg.get("compression_ratio_threshold", 2.4),
+        condition_on_previous_text=False,
+        temperature=0.0,
+    )
+
+
+def _run(model, wav_path, cfg):
+    segments, _ = model.transcribe(wav_path, **_transcribe_kwargs(cfg))
+    return " ".join(s.text.strip() for s in segments).strip()
 
 
 class Transcriber:
@@ -134,7 +156,6 @@ class Transcriber:
             self._device = device
             _debug_log(f"Modelo carregado localmente: {self.config['model']} em {device} ({compute})")
         except Exception as e:
-
             if device == "cuda":
                 _debug_log(f"CUDA load local falhou ({e}), fallback CPU")
                 self.model = WhisperModel(
@@ -183,11 +204,14 @@ class Transcriber:
         original_path = wav_path
         if denoise and self.config.get("noise_suppression", True):
             wav_path = self._denoise_file(wav_path)
-            
-        try:
-            return self._transcribe_internal(wav_path)
-        finally:
 
+        try:
+            text = self._transcribe_internal(wav_path)
+            if is_hallucination(text):
+                _debug_log(f"Alucinação descartada: {text!r}")
+                return ""
+            return text
+        finally:
             if wav_path != original_path and os.path.exists(wav_path):
                 try:
                     os.remove(wav_path)
@@ -199,24 +223,15 @@ class Transcriber:
 
         if self.use_daemon:
             try:
-
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 s.settimeout(DAEMON_TIMEOUT)
                 s.connect(DAEMON_SOCKET)
-                
-                req = {
-                    "action": "transcribe",
-                    "wav_path": wav_path,
-                    "language": self.config["language"],
-                    "initial_prompt": self.config.get("initial_prompt", ""),
-                    "no_speech_threshold": self.config.get("no_speech_threshold", 0.6),
-                    "log_prob_threshold": self.config.get("log_prob_threshold", -1.0),
-                    "compression_ratio_threshold": self.config.get("compression_ratio_threshold", 2.4),
-                    "condition_on_previous_text": False,
-                    "temperature": 0.0,
-                }
+
+                keys = ("model", "language", "initial_prompt", "no_speech_threshold",
+                        "log_prob_threshold", "compression_ratio_threshold")
+                req = {"action": "transcribe", "wav_path": wav_path, **{k: self.config[k] for k in keys if k in self.config}}
                 s.sendall(json.dumps(req).encode('utf-8'))
-                
+
 
                 data = []
                 while True:
@@ -225,7 +240,7 @@ class Transcriber:
                         break
                     data.append(chunk)
                 s.close()
-                
+
                 resp = json.loads(b''.join(data).decode('utf-8'))
                 if "text" in resp:
                     return resp["text"].strip()
@@ -241,51 +256,20 @@ class Transcriber:
 
         if not self.model:
             self._load_model()
-            
-        try:
-            segments, _ = self.model.transcribe(
-                wav_path,
-                beam_size=5,
-                language=self.config["language"],
-                vad_filter=True,
-                initial_prompt=self.config.get("initial_prompt", ""),
-                no_speech_threshold=self.config.get("no_speech_threshold", 0.6),
-                log_prob_threshold=self.config.get("log_prob_threshold", -1.0),
-                compression_ratio_threshold=self.config.get("compression_ratio_threshold", 2.4),
-                condition_on_previous_text=False,
-                temperature=0.0,
-            )
-            text = " ".join(s.text.strip() for s in segments)
-            return text.strip()
-        except Exception as e:
 
-            if self._device == "cuda":
-                _debug_log(f"CUDA transcribe local falhou ({e}), recriando modelo CPU")
-                try:
-                    from faster_whisper import WhisperModel
-                    self.model = WhisperModel(
-                        self.config["model"],
-                        device="cpu",
-                        compute_type="int8"
-                    )
-                    self._device = "cpu"
-                    segments, _ = self.model.transcribe(
-                        wav_path,
-                        beam_size=5,
-                        language=self.config["language"],
-                        vad_filter=True,
-                        initial_prompt=self.config.get("initial_prompt", ""),
-                        no_speech_threshold=self.config.get("no_speech_threshold", 0.6),
-                        log_prob_threshold=self.config.get("log_prob_threshold", -1.0),
-                        compression_ratio_threshold=self.config.get("compression_ratio_threshold", 2.4),
-                        condition_on_previous_text=False,
-                        temperature=0.0,
-                    )
-                    text = " ".join(s.text.strip() for s in segments)
-                    return text.strip()
-                except Exception:
-                    return ""
-            return ""
+        try:
+            return _run(self.model, wav_path, self.config)
+        except Exception as e:
+            if self._device != "cuda":
+                return ""
+            _debug_log(f"CUDA transcribe local falhou ({e}), recriando modelo CPU")
+            try:
+                from faster_whisper import WhisperModel
+                self.model = WhisperModel(self.config["model"], device="cpu", compute_type="int8")
+                self._device = "cpu"
+                return _run(self.model, wav_path, self.config)
+            except Exception:
+                return ""
 
 
 def is_daemon_running():
@@ -315,13 +299,10 @@ def run_daemon(config):
         except OSError:
             pass
 
-
     with open(DAEMON_PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
 
     _debug_log("=== DAEMON INICIADO ===")
-    
-
 
     if os.path.exists(DAEMON_SOCKET):
         try:
@@ -329,15 +310,16 @@ def run_daemon(config):
         except OSError:
             pass
 
-    try:
-        from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel
+
+    def load(name):
         device, compute = choose_device(config)
-        _debug_log(f"Daemon: Carregando modelo '{config['model']}' em {device} ({compute})...")
-        model = WhisperModel(
-            config["model"],
-            device=device,
-            compute_type=compute
-        )
+        _debug_log(f"Daemon: Carregando modelo '{name}' em {device} ({compute})...")
+        return WhisperModel(name, device=device, compute_type=compute)
+
+    loaded = config["model"]
+    try:
+        model = load(loaded)
         _debug_log("Daemon: Modelo carregado e pronto.")
     except Exception as e:
         _debug_log(f"Daemon: Erro crítico ao carregar modelo: {e}")
@@ -347,14 +329,11 @@ def run_daemon(config):
             pass
         sys.exit(1)
 
-
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(DAEMON_SOCKET)
     server.listen(5)
-    
 
     os.chmod(DAEMON_SOCKET, 0o600)
-
 
     def shutdown(signum, frame):
         _debug_log("Daemon: Encerrando...")
@@ -366,7 +345,7 @@ def run_daemon(config):
                 except OSError:
                     pass
         sys.exit(0)
-        
+
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
@@ -380,33 +359,30 @@ def run_daemon(config):
             if not req_data:
                 conn.close()
                 continue
-                
+
             req = json.loads(req_data.decode('utf-8'))
             action = req.get("action")
-            
+
             if action == "transcribe":
                 wav_path = req.get("wav_path")
                 if not wav_path or not os.path.exists(wav_path):
                     conn.sendall(json.dumps({"error": "WAV file not found"}).encode('utf-8'))
                     conn.close()
                     continue
-                
+
                 _debug_log(f"Daemon: Transcrevendo {wav_path}...")
                 t0 = time.time()
+                # Modelo trocado nos Ajustes: recarrega aqui, sem reiniciar o serviço.
+                want = req.get("model") or loaded
+                if want != loaded:
+                    model = None  # libera a VRAM antes de carregar o outro
+                    try:
+                        model, loaded = load(want), want
+                    except Exception as ex:
+                        _debug_log(f"Daemon: modelo '{want}' falhou ({ex}); mantendo '{loaded}'")
+                        model = load(loaded)
                 try:
-                    segments, _ = model.transcribe(
-                        wav_path,
-                        beam_size=5,
-                        language=req.get("language", config["language"]),
-                        vad_filter=True,
-                        initial_prompt=req.get("initial_prompt", ""),
-                        no_speech_threshold=req.get("no_speech_threshold", 0.6),
-                        log_prob_threshold=req.get("log_prob_threshold", -1.0),
-                        compression_ratio_threshold=req.get("compression_ratio_threshold", 2.4),
-                        condition_on_previous_text=req.get("condition_on_previous_text", False),
-                        temperature=req.get("temperature", 0.0),
-                    )
-                    text = " ".join(s.text.strip() for s in segments).strip()
+                    text = _run(model, wav_path, req)
                     t1 = time.time()
                     _debug_log(f"Daemon: Sucesso em {t1-t0:.2f}s -> {text[:100]}")
                     conn.sendall(json.dumps({"text": text}).encode('utf-8'))
@@ -415,7 +391,7 @@ def run_daemon(config):
                     conn.sendall(json.dumps({"error": str(ex)}).encode('utf-8'))
             else:
                 conn.sendall(json.dumps({"error": "Unknown action"}).encode('utf-8'))
-            
+
             conn.close()
         except Exception as e:
             _debug_log(f"Daemon: Erro no loop de conexão: {e}")

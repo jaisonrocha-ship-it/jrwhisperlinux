@@ -8,9 +8,9 @@ import math
 
 import cairo
 import numpy as np
-from gi.repository import Gdk, GdkPixbuf
+from gi.repository import Gdk
 
-from .theme import ICONS, accent_pair, hex_to_rgb
+from .theme import accent_pair, hex_to_rgb, icon_pixbuf
 
 SIZE_SCALE = {"s": 0.8, "m": 1.0, "l": 1.25}
 
@@ -41,16 +41,6 @@ def spectrum_bands(samples, sr=16000, n_bands=32, fmin=90.0, fmax=7000.0):
 
 def _lerp(a, b, t):
     return tuple(x + (y - x) * t for x, y in zip(a, b))
-
-
-def _icon_pixbuf(name, size, color="#FFFFFF", stroke=2.0):
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" '
-           f'stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
-    loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
-    loader.set_size(size, size)
-    loader.write(svg.encode())
-    loader.close()
-    return loader.get_pixbuf()
 
 
 def rounded_rect(cr, x, y, w, h, r):
@@ -117,15 +107,21 @@ class Visual:
 
 
 class OrbVisual(Visual):
-    """Anel luminoso com o mic no centro (referência: orbe índigo/violeta)."""
-    RING = 140   # diâmetro do anel no tamanho M
+    """Esfera de plasma: bolhas de luz se misturando dentro de uma membrana que ondula com a voz."""
+    RING = 140   # diâmetro da esfera no tamanho M
     PAD = 46     # espaço do brilho em volta
+    BLOBS = (    # raio da órbita, raio da bolha, vel. x, vel. y, fase, mistura início→fim
+        (0.34, 0.66, 1.00, 1.30, 0.0, 0.0),
+        (0.40, 0.58, -1.20, 0.90, 2.1, 1.0),
+        (0.30, 0.52, 0.80, -1.10, 4.0, 0.5),
+        (0.42, 0.46, -0.70, -1.50, 1.3, 0.2),
+        (0.24, 0.42, 1.50, 0.60, 5.2, 0.8),
+    )
 
     def __init__(self, config):
         super().__init__(config)
-        self.angle = 0.0
-        self.mic = _icon_pixbuf("mic", int(34 * self.scale), stroke=1.8)
-        self.check = None
+        self.angle = 0.0   # fase do plasma
+        self.mic = icon_pixbuf("mic", int(34 * self.scale), "#FFFFFF", 1.8)
 
     def size(self):
         d = (self.RING + 2 * self.PAD) * self.scale
@@ -135,9 +131,22 @@ class OrbVisual(Visual):
         super().advance(dt)
         if self.reduce_motion:
             return
-        speed = {"transcribing": 3.2, "listening": 0.7 + 2.6 * self.level,
-                 "calibrating": 0.5, "error": 0.2}.get(self.state, 0.45)
+        speed = {"transcribing": 2.6, "listening": 0.6 + 2.2 * self.level,
+                 "calibrating": 0.5, "error": 0.2}.get(self.state, 0.4)
         self.angle += speed * dt
+
+    def _membrane(self, cr, cx, cy, r):
+        """Contorno ondulado: soma de senos no ângulo, amplitude segue a voz."""
+        p, amp = self.angle, 0.018 + 0.07 * self.level
+        n = 72
+        for i in range(n + 1):
+            th = 2 * math.pi * i / n
+            k = 1 + amp * (0.6 * math.sin(3 * th + p * 1.3)
+                           + 0.4 * math.sin(2 * th - p * 0.9 + 2.0)
+                           + 0.3 * math.sin(5 * th - p * 1.7 + 1.0))
+            x, y = cx + r * k * math.cos(th), cy + r * k * math.sin(th)
+            cr.line_to(x, y) if i else cr.move_to(x, y)
+        cr.close_path()
 
     def draw(self, cr, cx, cy):
         s = self.scale
@@ -146,9 +155,9 @@ class OrbVisual(Visual):
         if self.state == "transcribing" and not self.reduce_motion:
             pulse = 0.5 + 0.5 * math.sin(self.t * 5.0)
         r = self.RING / 2 * s * (1 + 0.10 * self.level + breathe)
-        ring_w = 7 * s * (1 + 0.45 * self.level)
-        a = self.angle
-        dx, dy = r * math.cos(a), r * math.sin(a)
+        c0, c1 = self.colors
+        mid = _lerp(c0, c1, 0.5)
+        intensity = self.glow * (0.75 + 0.6 * self.level + 0.35 * pulse)
 
         # fundo escuro: contraste sobre qualquer desktop (o brilho aditivo precisa dele)
         halo = cairo.RadialGradient(cx, cy, r * 0.4, cx, cy, r * 1.7)
@@ -158,59 +167,57 @@ class OrbVisual(Visual):
         cr.set_source(halo)
         cr.arc(cx, cy, r * 1.7, 0, 2 * math.pi)
         cr.fill()
-        # miolo sólido: o desktop não pode aparecer através do orbe
-        core = cairo.RadialGradient(cx, cy - r * 0.3, r * 0.1, cx, cy, r)
-        core.add_color_stop_rgba(0, 0.11, 0.08, 0.27, 0.97)
-        core.add_color_stop_rgba(1, 0.06, 0.04, 0.16, 0.97)
-        cr.set_source(core)
-        cr.arc(cx, cy, r, 0, 2 * math.pi)
-        cr.fill()
 
         cr.save()
-        cr.set_operator(cairo.OPERATOR_ADD)  # neon: as camadas somam luz
-        intensity = self.glow * (0.7 + 0.7 * self.level + 0.4 * pulse)
-        passes = 12
-        for k in range(passes, 0, -1):
-            f = k / passes
-            cr.set_line_width(ring_w + f * 44 * s)
-            cr.set_source(self.gradient(cx - dx, cy - dy, cx + dx, cy + dy,
-                                        alpha=0.11 * intensity * (1 - f) ** 1.6, a0=0.45))
-            cr.arc(cx, cy, r, 0, 2 * math.pi)
-            cr.stroke()
-
-        # anel secundário girando ao contrário, dá profundidade
-        r2 = r * (0.955 - 0.03 * self.level)
-        b = -a * 1.4 + 1.2
-        cr.set_line_width(ring_w * 0.7)
-        cr.set_source(self.gradient(cx + r2 * math.cos(b), cy + r2 * math.sin(b),
-                                    cx - r2 * math.cos(b), cy - r2 * math.sin(b), alpha=0.35, a0=0.05))
-        cr.arc(cx, cy, r2, 0, 2 * math.pi)
-        cr.stroke()
-
-        # anel principal: base fina + meia-lua mais grossa e brilhante do lado "quente"
-        cr.set_line_width(ring_w * 0.55)
-        cr.set_source(self.gradient(cx - dx, cy - dy, cx + dx, cy + dy, alpha=0.85, a0=0.55))
-        cr.arc(cx, cy, r, 0, 2 * math.pi)
-        cr.stroke()
-        cr.set_line_width(ring_w)
-        cr.set_line_cap(cairo.LINE_CAP_ROUND)
-        cr.set_source(self.gradient(cx - dx, cy - dy, cx + dx, cy + dy, alpha=0.9, a0=0.0))
-        cr.arc(cx, cy, r, a - 1.7, a + 1.7)
-        cr.stroke()
-        # núcleo branco no ponto mais quente
-        cr.set_line_width(ring_w * 0.35)
-        cr.set_source_rgba(1, 1, 1, 0.35 + 0.35 * self.level)
-        cr.arc(cx, cy, r, a - 0.55, a + 0.55)
-        cr.stroke()
+        cr.set_operator(cairo.OPERATOR_ADD)  # luz soma luz
+        glow = cairo.RadialGradient(cx, cy, r * 0.8, cx, cy, r * 1.65)
+        glow.add_color_stop_rgba(0, *mid, 0.40 * intensity)
+        glow.add_color_stop_rgba(0.35, *mid, 0.14 * intensity)
+        glow.add_color_stop_rgba(1, *mid, 0.0)
+        cr.set_source(glow)
+        cr.arc(cx, cy, r * 1.65, 0, 2 * math.pi)
+        cr.fill()
         cr.restore()
 
-        # disco interno de vidro
-        inner = r - ring_w * 1.6
-        disc = cairo.RadialGradient(cx, cy - inner * 0.35, inner * 0.05, cx, cy, inner * 0.62)
-        disc.add_color_stop_rgba(0, 1, 1, 1, 0.12)
-        disc.add_color_stop_rgba(1, 1, 1, 1, 0.04)
-        cr.set_source(disc)
-        cr.arc(cx, cy, inner * 0.62, 0, 2 * math.pi)
+        # miolo sólido dentro da membrana: o desktop não aparece através da esfera
+        self._membrane(cr, cx, cy, r)
+        core = cairo.RadialGradient(cx, cy - r * 0.3, r * 0.1, cx, cy, r)
+        core.add_color_stop_rgba(0, 0.11, 0.08, 0.27, 0.97)
+        core.add_color_stop_rgba(1, 0.05, 0.03, 0.14, 0.97)
+        cr.set_source(core)
+        cr.fill_preserve()
+
+        cr.save()
+        cr.clip()
+        cr.set_operator(cairo.OPERATOR_ADD)
+        p = self.angle
+        for orbit, rad, vx, vy, ph, mix in self.BLOBS:
+            bx = cx + r * orbit * math.cos(p * vx + ph)
+            by = cy + r * orbit * math.sin(p * vy + ph)
+            br = r * rad * (1 + 0.25 * self.level)
+            c = _lerp(c0, c1, mix)
+            g = cairo.RadialGradient(bx, by, 0, bx, by, br)
+            g.add_color_stop_rgba(0, *c, 0.55 * intensity)
+            g.add_color_stop_rgba(0.45, *c, 0.22 * intensity)
+            g.add_color_stop_rgba(1, *c, 0.0)
+            cr.set_source(g)
+            cr.paint()
+        # borda acesa (fresnel): a esfera brilha mais na beirada
+        rim = cairo.RadialGradient(cx, cy, r * 0.55, cx, cy, r * 1.08)
+        rim.add_color_stop_rgba(0, *c1, 0.0)
+        rim.add_color_stop_rgba(0.7, *c1, 0.10 * intensity)
+        rim.add_color_stop_rgba(1, *_lerp(c1, (1, 1, 1), 0.35), 0.75 * intensity)
+        cr.set_source(rim)
+        cr.paint()
+        cr.restore()
+
+        # reflexo de vidro no alto
+        hx, hy = cx - r * 0.32, cy - r * 0.48
+        spec = cairo.RadialGradient(hx, hy, 0, hx, hy, r * 0.42)
+        spec.add_color_stop_rgba(0, 1, 1, 1, 0.20)
+        spec.add_color_stop_rgba(1, 1, 1, 1, 0.0)
+        cr.set_source(spec)
+        cr.arc(hx, hy, r * 0.42, 0, 2 * math.pi)
         cr.fill()
 
         # ícone central: check no sucesso, mic no resto

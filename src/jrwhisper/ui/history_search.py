@@ -4,7 +4,7 @@ import subprocess
 from gi.repository import Gtk, Gdk, GLib, Pango
 
 from .. import history
-from ..paste import paste_text
+from ..paste import copy_text, paste_text
 from . import theme as t
 
 CSS = b"""
@@ -141,7 +141,7 @@ class HistorySearch(Gtk.Window):
         elif ctrl and ev.keyval in (Gdk.KEY_c, Gdk.KEY_C) and not self.entry.get_selection_bounds():
             text = self.selected_text()
             if text:
-                Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(text, -1)
+                copy_text(text)  # xclip persiste depois que esta janela fecha
                 self.hint.set_text("Copiado")
         else:
             return False

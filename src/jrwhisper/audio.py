@@ -49,10 +49,6 @@ def set_volume(val):
         _debug_log(f"Falha ao definir volume: {e}")
 
 
-
-
-
-
 class AudioCapture:
     """Captura áudio via parec com buffer thread-safe e pré-buffer."""
 
@@ -176,7 +172,6 @@ def calibrate_threshold(capture, config):
     except OSError:
         pass
 
-
     t0 = time.time()
     if not capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT):
         _debug_log("ERRO: parec não produziu dados em 5s")
@@ -185,10 +180,8 @@ def calibrate_threshold(capture, config):
     wait_time = time.time() - t0
     _debug_log(f"parec iniciou em {wait_time:.3f}s")
 
-
     time.sleep(0.2)
     capture.get_audio_float32()
-
 
     n_samples = int(CALIBRATION_MEASURE_SECS / TICK_INTERVAL)
     rms_samples = []
@@ -201,7 +194,6 @@ def calibrate_threshold(capture, config):
     if not rms_samples:
         _debug_log("AVISO: nenhuma amostra RMS > 0 durante calibração")
         return THRESHOLD_FLOOR
-
 
     arr = np.array(rms_samples)
     noise_median = float(np.median(arr))

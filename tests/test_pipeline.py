@@ -19,12 +19,13 @@ CFG = {**DEFAULT_CONFIG, "profiles_enabled": True, "ai_enabled": True}
 
 class FakeNIM(BaseHTTPRequestHandler):
     reply = "Texto reescrito."
+    raw = None
     status = 200
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         FakeNIM.last = body
-        out = json.dumps({"choices": [{"message": {"content": FakeNIM.reply}}]}).encode()
+        out = FakeNIM.raw or json.dumps({"choices": [{"message": {"content": FakeNIM.reply}}]}).encode()
         self.send_response(FakeNIM.status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -88,8 +89,14 @@ def test_ai_pipeline_with_fake_server():
         FakeNIM.status = 500                     # IA fora do ar: cola o original formatado
         r = pipeline.process(CFG, "Modo e-mail, oi joão", wm_class="firefox")
         assert r.ai_error and r.text == "Oi joão."
-    finally:
+
         FakeNIM.status = 200
+        for raw in (b"<html>gateway</html>", b'{"error": "quota"}'):  # 200 com corpo inesperado
+            FakeNIM.raw = raw
+            r = pipeline.process(CFG, "Modo e-mail, oi joão", wm_class="firefox")
+            assert r.ai_error and r.text == "Oi joão."
+    finally:
+        FakeNIM.status, FakeNIM.raw = 200, None
         server.shutdown()
 
 

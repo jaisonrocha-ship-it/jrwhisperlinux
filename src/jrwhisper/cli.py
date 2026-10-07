@@ -1,26 +1,17 @@
 """
-WhisperFlow para Linux — Ditado por voz com overlay visual e transcrição instantânea
-faster-whisper + CUDA/CPU + GTK3 overlay
+JRWhisper — ditado por voz local para Linux (faster-whisper + GTK3).
 
-USO: 
-  dictate                      → Inicia overlay de ditado (Super+Shift+V)
+USO:
+  dictate                       → Dita (atalho padrão Super+Shift+V). De novo: encerra e transcreve
   dictate --settings / -s [aba] → Ajustes (abas: general, appearance, microphone, recognition,
-                                 text, ai, apps, history, handsfree, advanced)
-  dictate --daemon             → Inicia o daemon persistente do Whisper
-  dictate --status             → Mostra informações e status da ferramenta
-  dictate --calibrate          → Mede ruído e voz, diagnostica o mic e salva o limiar
-  dictate --calibrate-gui      → Mesma calibração em janela, com medidor ao vivo
-  dictate --mode <id>          → Dita já com um modo de IA (corrigir, email, mensagem, ingles, topicos)
-  dictate --history            → Busca rápida no histórico (Enter cola)
-
-v3.3 — 2026-07-03
-  • Código limpo livre de comentários internos e estruturado para publicação no GitHub.
-  • Interface de 3 linhas deslizantes com fading de opacidade e altura estática.
-  • Suporte híbrido Wayland e X11.
-  • Isolamento de voz neural integrado com RNNoise via FFmpeg.
-  • Detecção multi-monitor dinâmica baseado na posição do mouse.
-  • Daemon Mode com latência zero e tempo de silêncio otimizado.
-  • Painel de Configurações Premium nativo em GTK3 (--settings / -s).
+                                  text, ai, apps, history, handsfree, advanced)
+  dictate --mode <id>           → Dita já com um modo de IA (corrigir, email, mensagem, ingles, topicos)
+  dictate --history             → Busca rápida no histórico (Enter cola)
+  dictate --calibrate           → Mede ruído e voz, diagnostica o mic e salva o limiar
+  dictate --calibrate-gui       → Mesma calibração em janela, com medidor ao vivo
+  dictate --daemon              → Serviço que mantém o modelo carregado
+  dictate --status              → Informações e estado
+  dictate --config              → Mostra o config efetivo (JSON)
 """
 
 import sys
@@ -29,6 +20,7 @@ import time
 import numpy as np
 from gi.repository import Gtk
 
+from . import __version__
 from .audio import AudioCapture, calibration_state, evaluate_levels, friendly_mic_name, is_yeti, measure_levels, resolve_mic, rms_db, save_mic_calibration, yeti_hw_status
 from .config import CALIBRATION_VERDICTS, load_config
 from .dictation import is_running, run_overlay_mode
@@ -96,7 +88,7 @@ def show_status():
     free_vram = get_free_vram_mb()
     cublas = _find_cublas_path()
     daemon_running = is_daemon_running()
-    print("Dictate v3.3 — WhisperFlow for Linux")
+    print(f"JRWhisper {__version__}")
     print(f"  Modelo:        {config['model']}")
     print(f"  Engine:        {device} ({compute})")
     print(f"  VRAM livre:    {free_vram} MB")
@@ -125,7 +117,7 @@ def show_status():
 
 def main():
     config = load_config()
-    flags = [a for a in sys.argv[1:] if a.startswith('--') or a.startswith('-')]
+    flags = [a for a in sys.argv[1:] if a.startswith('-')]
 
     if not flags:
         run_overlay_mode(config)
@@ -163,5 +155,6 @@ def main():
         Gtk.main()
     elif arg in ("-h", "--help"):
         print(__doc__)
-    else:
-        run_overlay_mode(config)
+    else:  # erro de digitação não pode começar a gravar
+        print(f"Opção desconhecida: {arg}\n{__doc__}", file=sys.stderr)
+        sys.exit(2)

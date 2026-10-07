@@ -4,11 +4,15 @@ Tudo que é janela (Configurações, Calibração, Histórico) monta a UI com es
 helpers; o overlay usa só ACCENTS/accent_pair (desenha com Cairo).
 """
 import math
+import os
 
 import cairo
 from gi.repository import GObject, Gtk, Gdk, GdkPixbuf
 
 from ..config import load_config
+
+# <repo>/assets/icons (realpath: ~/.local/bin/dictate é symlink)
+APP_ICON = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "assets", "icons", "jrwhisper.svg")
 
 # Acento: (cor sólida da UI, início do gradiente, fim do gradiente).
 # O gradiente tem contraste de matiz (ex.: azul → magenta) para o orbe ter profundidade.
@@ -195,8 +199,6 @@ progressbar progress {{ background-color: @accent; border: none; border-radius: 
 scrollbar {{ background: transparent; border: none; }}
 scrollbar slider {{ background-color: rgba(255, 255, 255, 0.18); border-radius: 999px; min-width: 6px; min-height: 6px; border: none; }}
 
-.chip {{ background-color: alpha(@accent, 0.18); color: @accent; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; }}
-.callout {{ background-color: alpha(@accent, 0.10); border-radius: 8px; padding: 10px 12px; }}
 
 messagedialog, messagedialog .dialog-action-area {{ background-color: @card; }}
 
@@ -214,7 +216,6 @@ messagedialog, messagedialog .dialog-action-area {{ background-color: @card; }}
 entry {{ min-height: 24px; padding-top: 3px; padding-bottom: 3px; }}
 list.group row switch {{ margin-top: 0; margin-bottom: 0; }}
 .keycap {{ background-color: @control; border-radius: 6px; padding: 3px 10px; font-weight: 600; }}
-.preview {{ background-color: #111114; border-radius: 12px; }}
 """
 
 _provider = None
@@ -229,14 +230,13 @@ def apply_theme(screen, config=None):
     global _provider
     css = build_css(config if config is not None else load_config()).encode()
     if _provider is None:
+        try:  # ícone de todas as janelas (dock/Alt+Tab); 256 px fica nítido com zoom do Plank
+            Gtk.Window.set_default_icon(GdkPixbuf.Pixbuf.new_from_file_at_size(APP_ICON, 256, 256))
+        except Exception:
+            pass
         _provider = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_screen(screen, _provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     _provider.load_from_data(css)
-
-
-# Compatibilidade com o nome antigo.
-def apply_settings_css(screen):
-    apply_theme(screen)
 
 
 # ── Ícones (Lucide, ISC) ────────────────────────────────────────────
@@ -268,10 +268,22 @@ def _svg_pixbuf(svg, size):
     return loader.get_pixbuf()
 
 
-def icon(name, size=16, color="#F5F5F7", stroke=2.0):
+def icon_pixbuf(name, size, color="#F5F5F7", stroke=2.0):
+    """Ícone Lucide como pixbuf (o overlay desenha em Cairo; as janelas usam icon())."""
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" '
            f'stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
-    return Gtk.Image.new_from_pixbuf(_svg_pixbuf(svg, size))
+    return _svg_pixbuf(svg, size)
+
+
+def icon(name, size=16, color="#F5F5F7", stroke=2.0):
+    return Gtk.Image.new_from_pixbuf(icon_pixbuf(name, size, color, stroke))
+
+
+def app_icon(size=32):
+    """Ícone do app (o mesmo da dock), nítido em telas HiDPI."""
+    scale = Gdk.Screen.get_default().get_monitor_scale_factor(0) or 1
+    pb = GdkPixbuf.Pixbuf.new_from_file_at_size(APP_ICON, size * scale, size * scale)
+    return Gtk.Image.new_from_surface(Gdk.cairo_surface_create_from_pixbuf(pb, scale, None))
 
 
 def tile_icon(name, color, size=22):

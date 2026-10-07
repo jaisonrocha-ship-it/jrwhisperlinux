@@ -9,6 +9,7 @@ import math
 import os
 import subprocess
 import threading
+import time
 
 import cairo
 import numpy as np
@@ -19,13 +20,13 @@ from .. import history, shortcuts
 from ..audio import (AudioCapture, calibration_state, default_source_name, friendly_mic_name,
                      list_source_names, resolve_mic, rms_db)
 from ..config import DEFAULT_CONFIG, RUNTIME_DIR, _debug_log, save_config
+from ..paste import copy_text
 from ..transcribe import is_daemon_running
 from . import theme as t
 from .calibration import CalibrationWindow
 from .visuals import VISUAL_LABELS, make_visual, rounded_rect, spectrum_bands
 
 DICTATE_CMD = os.path.expanduser("~/.local/bin/dictate")
-CRITICAL_KEYS = ("model", "language", "initial_prompt")  # exigem reiniciar o daemon
 
 PAGES = [
     # id, rótulo, ícone, cor do quadradinho
@@ -160,15 +161,7 @@ class SettingsWindow(Gtk.Window):
         self.set_position(Gtk.WindowPosition.CENTER)
         self.config = config
         self._save_id = 0
-        self._critical_changed = False
         t.apply_theme(self.get_screen(), config)
-        try:
-            self.set_icon(t._svg_pixbuf(
-                f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" '
-                f'fill="{t.ui_accent(config)}"/><g transform="translate(5 5) scale(0.5833)" fill="none" stroke="#fff" '
-                f'stroke-width="2.3" stroke-linecap="round">{t.ICONS["mic"]}</g></svg>', 64))
-        except Exception as e:
-            _debug_log(f"Ícone da janela: {e}")
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.add(root)
@@ -180,7 +173,7 @@ class SettingsWindow(Gtk.Window):
         brand.set_margin_top(18)
         brand.set_margin_bottom(8)
         brand.set_margin_start(20)
-        brand.pack_start(t.tile_icon("mic", t.ui_accent(config), 28), False, False, 0)
+        brand.pack_start(t.app_icon(34), False, False, 0)
         names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         names.pack_start(t.label("JRWhisper", "row-title"), False, False, 0)
         names.pack_start(t.label("Ditado por voz", "row-subtitle"), False, False, 0)
@@ -218,9 +211,6 @@ class SettingsWindow(Gtk.Window):
         if self.config.get(key) == value:
             return
         self.config[key] = value
-        if key in CRITICAL_KEYS:
-            self._critical_changed = True
-            self._show_restart_callout()
         if self._save_id:
             GLib.source_remove(self._save_id)
         self._save_id = GLib.timeout_add(350, self._flush)
@@ -401,7 +391,7 @@ class SettingsWindow(Gtk.Window):
     def page_general(self):
         root, box = t.page("Geral", "O essencial do ditado.")
         lb = t.group(box, "Ditado")
-        self._shortcut_row(lb, "Atalho de ditado", "Toque para ditar; aperte de novo para cancelar.",
+        self._shortcut_row(lb, "Atalho de ditado", "Toque para ditar; aperte de novo para encerrar e transcrever.",
                            "Dictate", DICTATE_CMD)
         t.choice_row(lb, "Idioma", None, [("pt", "Português"), ("en", "Inglês"), ("es", "Espanhol"),
                                           ("auto", "Detectar automaticamente")],
@@ -417,9 +407,22 @@ class SettingsWindow(Gtk.Window):
 
         def toggle_daemon(s, _p):
             on = s.get_active()
-            cmd = ["systemctl", "--user", "enable" if on else "disable", "--now", "dictate-daemon"]
-            subprocess.run(cmd, capture_output=True, timeout=15)
-            row.subtitle.set_text("Iniciando…" if on else "Parado")
+            row.subtitle.set_text("Iniciando…" if on else "Parando…")
+            s.set_sensitive(False)
+
+            def work():  # systemctl pode levar segundos: fora da thread do GTK
+                cmd = ["systemctl", "--user", "enable" if on else "disable", "--now", "dictate-daemon"]
+                try:
+                    subprocess.run(cmd, capture_output=True, timeout=15)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    _debug_log(f"systemctl: {e}")
+                time.sleep(1.5)  # o PID aparece quando o serviço sobe
+                GLib.idle_add(done)
+
+            def done():
+                s.set_sensitive(True)
+                row.subtitle.set_text("Em execução" if is_daemon_running() else "Parado")
+            threading.Thread(target=work, daemon=True).start()
         sw.connect("notify::active", toggle_daemon)
         box.pack_start(t.label("JRWhisperLinux · MIT · 100% local, exceto a reescrita por IA na nuvem (opcional).",
                                "group-footer"), False, False, 0)
@@ -526,18 +529,8 @@ class SettingsWindow(Gtk.Window):
 
     def page_recognition(self):
         root, box = t.page("Reconhecimento", "Modelo Whisper e quando encerrar a gravação.")
-        self.restart_box = Gtk.Box(spacing=12)
-        self.restart_box.get_style_context().add_class("callout")
-        self.restart_box.pack_start(t.label("Reinicie o serviço para aplicar a mudança de modelo, idioma ou prompt.",
-                                            wrap=True), True, True, 0)
-        rb = Gtk.Button(label="Reiniciar agora")
-        rb.get_style_context().add_class("btn-primary")
-        rb.connect("clicked", self._restart_daemon)
-        self.restart_box.pack_start(rb, False, False, 0)
-        self.restart_box.set_no_show_all(True)
-        box.pack_start(self.restart_box, False, False, 0)
-
-        lb = t.group(box, "Modelo", "Modelos maiores erram menos e usam mais GPU. turbo é o melhor custo-benefício.")
+        lb = t.group(box, "Modelo", "Modelos maiores erram menos e usam mais GPU. turbo é o melhor custo-benefício. "
+                                    "A troca vale no próximo ditado (o primeiro uso baixa o modelo).")
         models = [("tiny", "tiny"), ("base", "base"), ("small", "small"), ("medium", "medium"),
                   ("turbo", "large-v3-turbo"), ("large-v3", "large-v3")]
         t.choice_row(lb, "Modelo Whisper", None, models, self.config.get("model", "medium"),
@@ -565,28 +558,6 @@ class SettingsWindow(Gtk.Window):
         t.slider_row(lb, "Duração máxima", None, 15, 300, 5, self.config.get("max_duration", 60),
                      lambda v: f"{int(v)} s", lambda v: self.set("max_duration", int(v)))
         return root
-
-    def _show_restart_callout(self):
-        if is_daemon_running() and hasattr(self, "restart_box"):
-            self.restart_box.show_all()
-
-    def _restart_daemon(self, btn):
-        self._flush()
-        btn.set_sensitive(False)
-        btn.set_label("Reiniciando…")
-
-        def work():
-            r = subprocess.run(["systemctl", "--user", "restart", "dictate-daemon"], capture_output=True, timeout=20)
-            GLib.idle_add(done, r.returncode == 0)
-
-        def done(ok):
-            btn.set_sensitive(True)
-            btn.set_label("Reiniciar agora")
-            if ok:
-                self.restart_box.hide()
-            else:
-                self._error("Não foi possível reiniciar o serviço", "Veja: systemctl --user status dictate-daemon")
-        threading.Thread(target=work, daemon=True).start()
 
     def page_text(self):
         root, box = t.page("Texto", "Pontuação, correções e atalhos de texto.")
@@ -845,8 +816,7 @@ class SettingsWindow(Gtk.Window):
                 copy_btn.add(t.icon("copy", 14, "#98989D"))
                 copy_btn.get_style_context().add_class("btn-flat")
                 copy_btn.set_tooltip_text("Copiar")
-                copy_btn.connect("clicked", lambda _b, txt=rec.get("text", ""): Gtk.Clipboard.get(
-                    Gdk.SELECTION_CLIPBOARD).set_text(txt, -1))
+                copy_btn.connect("clicked", lambda _b, txt=rec.get("text", ""): copy_text(txt))
                 meta = history.when(rec.get("ts", 0)) + (f" · {rec['app']}" if rec.get("app") else "") + \
                     (f" · IA: {rec['mode']}" if rec.get("mode") else "")
                 text = rec.get("text", "")

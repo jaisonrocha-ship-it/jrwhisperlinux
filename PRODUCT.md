@@ -33,4 +33,4 @@ product
 ## Accessibility & Inclusion
 - Clear typography (Inter font family, balanced font weights).
 - High-contrast text on dark translucent backgrounds.
-- Consideration for keyboard accessibility (global shortcut Super+Shift+V triggers and closes the recording cleanly).
+- Keyboard first: the global shortcut starts dictation and a second press finishes and transcribes (never discards speech); the AI review takes Enter / Esc / Ctrl+C / 1–9 while it is open.

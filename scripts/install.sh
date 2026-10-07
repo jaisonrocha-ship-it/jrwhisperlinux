@@ -41,11 +41,15 @@ fi
 ok "Codigo fonte pronto"
 
 VENV="$HOME/.local/share/dictation-venv"
-info "Criando ambiente virtual Python..."
-rm -rf "$VENV"
-python3 -m venv --system-site-packages "$VENV"
+# Reaproveita o venv numa atualização: recriar baixaria o faster-whisper (e o CUDA) inteiro de novo.
+if [ -x "$VENV/bin/python3" ]; then
+    info "Atualizando ambiente virtual Python..."
+else
+    info "Criando ambiente virtual Python..."
+    python3 -m venv --system-site-packages "$VENV"
+fi
 "$VENV/bin/pip" install -q --upgrade pip
-"$VENV/bin/pip" install -q faster-whisper numpy
+"$VENV/bin/pip" install -q --upgrade faster-whisper numpy
 ok "Ambiente Python configurado"
 
 info "Instalando comando dictate..."
@@ -69,6 +73,23 @@ mkdir -p "$HOME/.local/share/fonts"
 cp "$PWD/assets/fonts/InterVariable.ttf" "$HOME/.local/share/fonts/"
 fc-cache -f "$HOME/.local/share/fonts" >/dev/null 2>&1 || true
 ok "Fonte Inter instalada"
+
+# Ícone + .desktop: StartupWMClass casa as janelas (WM_CLASS "dictate") com o ícone na dock/Plank
+mkdir -p "$HOME/.local/share/icons/hicolor/scalable/apps" "$HOME/.local/share/applications"
+cp "$PWD/assets/icons/jrwhisper.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/jrwhisper.svg"
+cat > "$HOME/.local/share/applications/jrwhisper.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=JRWhisper
+Comment=Ditado por voz com IA local
+Exec=$HOME/.local/bin/dictate --settings
+Icon=jrwhisper
+Terminal=false
+Categories=Utility;Accessibility;
+StartupWMClass=dictate
+DESKTOP
+gtk-update-icon-cache -q -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+ok "Ícone e atalho do menu instalados"
 
 if [ -f "$PWD/config/bd.rnnn" ]; then
     cp "$PWD/config/bd.rnnn" "$HOME/.config/dictate/bd.rnnn"
@@ -115,10 +136,11 @@ systemctl --user enable --now dictate-daemon.service 2>/dev/null || true
 ok "Daemon configurado"
 
 CONFIG_JSON="$HOME/.config/dictate/config.json"
+INSTALL_LOG="${XDG_RUNTIME_DIR:-/tmp}/dictate_install.log"
 info "Pre-carregando modelo Whisper em background..."
 nohup "$VENV/bin/python3" -c "
 import json, os, sys
-sys.stdout = open('/tmp/dictate_install.log', 'w')
+sys.stdout = open('$INSTALL_LOG', 'w')
 from faster_whisper import WhisperModel
 model = 'medium'
 cfg = os.path.expanduser('$CONFIG_JSON')
@@ -138,6 +160,6 @@ echo "  dictate --help — comandos"
 echo "  https://jrwhisper.jasonrock.dev"
 echo ""
 if [ -n "$MODEL_PID" ]; then
-    echo "Aguardando download do modelo (cat /tmp/dictate_install.log)."
+    echo "Aguardando download do modelo (cat $INSTALL_LOG)."
     echo "O ditado funciona quando o download concluir."
 fi
