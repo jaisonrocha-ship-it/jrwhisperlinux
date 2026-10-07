@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 """
-Test: pipeline de formatação de texto importado do dictate.
+Test: pipeline de formatação de texto importado do textproc.
 """
 import sys, os
 import re
-import importlib.machinery
-import importlib.util
 
 # Importa o script 'dictate' (que não tem extensão .py) de forma dinâmica
-dictate_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../src/dictate'))
-loader = importlib.machinery.SourceFileLoader('dictate', dictate_path)
-spec = importlib.util.spec_from_loader('dictate', loader)
-dictate = importlib.util.module_from_spec(spec)
-loader.exec_module(dictate)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from jrwhisper import textproc
 
 # Obtém a função de formatação diretamente do arquivo de produção
-format_transcript = dictate.format_transcript
+format_transcript = textproc.format_transcript
 
 
 def run_tests():

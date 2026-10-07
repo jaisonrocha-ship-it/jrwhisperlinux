@@ -22,7 +22,8 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 
 | Arquivo | Função |
 |---------|--------|
-| `src/dictate` | Script principal (3020 linhas) — código de produção |
+| `src/dictate` | Porta de entrada (bootstrap do venv + `jrwhisper.cli.main`) |
+| `src/jrwhisper/` | Pacote: `config`, `audio`, `transcribe`, `textproc`, `paste`, `dictation`, `cli`, `ui/{overlay,settings,calibration,theme}` |
 | `scripts/install.sh` | One-line installer (curl | bash) |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
@@ -53,6 +54,7 @@ bash scripts/install.sh
 6. **Silence detection com histerese** — confirmação de fala 150ms + gap tolerance 2.5s.
 7. **GTK3 threads** — use `GLib.idle_add` para atualizar UI de threads background.
 8. **`os.execv` no bootstrap** — reexecuta o script dentro do venv. Cuidado com `sys.argv`.
+9. **Instalação por symlink** — `~/.local/bin/dictate` aponta para `src/dictate`, que acha o pacote via `realpath`. Nunca copie só o `src/dictate`.
 
 ## Pitfalls Conhecidos
 

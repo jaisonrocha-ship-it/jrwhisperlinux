@@ -1,0 +1,421 @@
+import sys
+import os
+import signal
+import subprocess
+import json
+import time
+import socket
+
+from .config import CONFIG_DIR, DAEMON_PID_FILE, DAEMON_SOCKET, DAEMON_TIMEOUT, RNNOISE_MODEL_NAME, _debug_log
+
+
+CUBLAS_SEARCH_PATHS = [
+    "/opt/resolve/libs",
+    "/usr/local/cuda-12/lib64",
+    "/usr/local/cuda/lib64",
+]
+
+
+def resolve_rnnoise_model_path():
+    """Localiza bd.rnnn: cópia do instalador em ~/.config/dictate, senão o repo."""
+    # realpath: ~/.local/bin/dictate costuma ser symlink para src/dictate.
+    # src/jrwhisper/transcribe.py → <repo>/config (realpath: ~/.local/bin/dictate é symlink)
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+    candidates = [
+        os.path.join(CONFIG_DIR, RNNOISE_MODEL_NAME),
+        os.path.join(repo_dir, "config", RNNOISE_MODEL_NAME),
+    ]
+    for path in candidates:
+        resolved = os.path.normpath(path)
+        if os.path.isfile(resolved):
+            return resolved
+    return None
+
+
+def get_free_vram_mb():
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            timeout=3
+        ).decode().strip()
+        return max(int(x) for x in out.split('\n') if x.strip())
+    except Exception:
+        return 0
+
+
+def _find_cublas_path():
+    """Procura libcublas.so.12 em caminhos conhecidos."""
+    for path in CUBLAS_SEARCH_PATHS:
+        if os.path.isfile(os.path.join(path, "libcublas.so.12")):
+            return path
+    return None
+
+
+_cublas_preloaded = False
+
+
+def _preload_cublas():
+    """Pré-carrega libcublas.so.12 e libcublasLt.so.12 via ctypes.
+    
+    Setar LD_LIBRARY_PATH depois que o processo já iniciou não funciona —
+    o linker dinâmico não relê a variável. ctypes.cdll.LoadLibrary() é
+    a forma correta de disponibilizar libs para módulos carregados depois.
+    """
+    global _cublas_preloaded
+    if _cublas_preloaded:
+        return True
+    
+    import ctypes
+    cublas_path = _find_cublas_path()
+    if not cublas_path:
+        return False
+    
+    try:
+        ctypes.cdll.LoadLibrary(os.path.join(cublas_path, "libcublas.so.12"))
+        ctypes.cdll.LoadLibrary(os.path.join(cublas_path, "libcublasLt.so.12"))
+        _cublas_preloaded = True
+        _debug_log(f"cuBLAS preloaded from {cublas_path}")
+        return True
+    except OSError as e:
+        _debug_log(f"cuBLAS preload falhou: {e}")
+        return False
+
+
+def choose_device(config):
+    """Decide CUDA vs CPU baseado na VRAM livre e disponibilidade de cublas."""
+    min_vram = config.get("gpu_min_vram_mb", 2500)
+    free = get_free_vram_mb()
+
+    if free >= min_vram:
+        if _preload_cublas():
+            _debug_log(f"GPU: VRAM={free}MB, cublas preloaded")
+            return "cuda", "int8_float16"
+        else:
+            _debug_log(f"GPU: VRAM={free}MB mas cublas.so.12 não encontrado, usando CPU")
+
+    _debug_log(f"CPU: VRAM={free}MB (min={min_vram}MB)")
+    return "cpu", "int8"
+
+
+class Transcriber:
+    def __init__(self, config):
+        self.config = config
+        self.model = None
+        self._device = None
+        self.use_daemon = self._check_daemon_alive()
+        if not self.use_daemon:
+            _debug_log("Daemon não detectado. Carregando modelo localmente (fallback)...")
+            self._load_model()
+        else:
+            _debug_log("Daemon detectado. Usando modo cliente.")
+
+    def _check_daemon_alive(self):
+        if not os.path.exists(DAEMON_SOCKET):
+            return False
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(0.2)
+            s.connect(DAEMON_SOCKET)
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    def _load_model(self):
+        from faster_whisper import WhisperModel
+        device, compute = choose_device(self.config)
+
+        try:
+            self.model = WhisperModel(
+                self.config["model"],
+                device=device,
+                compute_type=compute
+            )
+            self._device = device
+            _debug_log(f"Modelo carregado localmente: {self.config['model']} em {device} ({compute})")
+        except Exception as e:
+
+            if device == "cuda":
+                _debug_log(f"CUDA load local falhou ({e}), fallback CPU")
+                self.model = WhisperModel(
+                    self.config["model"],
+                    device="cpu",
+                    compute_type="int8"
+                )
+                self._device = "cpu"
+            else:
+                raise
+
+    def _denoise_file(self, wav_path):
+        """Aplica o filtro de isolamento de voz RNNoise do FFmpeg."""
+        model_path = resolve_rnnoise_model_path()
+        if not model_path:
+            _debug_log("RNNoise: modelo bd.rnnn não encontrado, pulando isolamento de voz")
+            return wav_path
+
+        denoised_path = wav_path + ".denoised.wav"
+        try:
+            cmd = [
+                "nice", "-n", "19", "ffmpeg", "-y", "-i", wav_path,
+                "-af", f"arnndn=m={model_path},aresample=16000",
+                denoised_path
+            ]
+            result = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
+            )
+            if (
+                result.returncode == 0
+                and os.path.exists(denoised_path)
+                and os.path.getsize(denoised_path) > 1000
+            ):
+                _debug_log(f"Isolamento de voz aplicado com sucesso: {denoised_path}")
+                return denoised_path
+            _debug_log(f"RNNoise: ffmpeg retornou {result.returncode}, usando WAV original")
+        except Exception as e:
+            _debug_log(f"Falha ao aplicar isolamento de voz: {e}")
+        return wav_path
+
+    def transcribe_file(self, wav_path, denoise=True):
+        """Transcreve o arquivo WAV. Tenta via Daemon, fallback para local."""
+        if not os.path.exists(wav_path):
+            return ""
+
+        original_path = wav_path
+        if denoise and self.config.get("noise_suppression", True):
+            wav_path = self._denoise_file(wav_path)
+            
+        try:
+            return self._transcribe_internal(wav_path)
+        finally:
+
+            if wav_path != original_path and os.path.exists(wav_path):
+                try:
+                    os.remove(wav_path)
+                except OSError:
+                    pass
+
+    def _transcribe_internal(self, wav_path):
+        """Lógica interna de transcrição (Daemon / Local)."""
+
+        if self.use_daemon:
+            try:
+
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(DAEMON_TIMEOUT)
+                s.connect(DAEMON_SOCKET)
+                
+                req = {
+                    "action": "transcribe",
+                    "wav_path": wav_path,
+                    "language": self.config["language"],
+                    "initial_prompt": self.config.get("initial_prompt", ""),
+                    "no_speech_threshold": self.config.get("no_speech_threshold", 0.6),
+                    "log_prob_threshold": self.config.get("log_prob_threshold", -1.0),
+                    "compression_ratio_threshold": self.config.get("compression_ratio_threshold", 2.4),
+                    "condition_on_previous_text": False,
+                    "temperature": 0.0,
+                }
+                s.sendall(json.dumps(req).encode('utf-8'))
+                
+
+                data = []
+                while True:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    data.append(chunk)
+                s.close()
+                
+                resp = json.loads(b''.join(data).decode('utf-8'))
+                if "text" in resp:
+                    return resp["text"].strip()
+                else:
+                    _debug_log(f"Erro do daemon: {resp.get('error')}")
+            except socket.timeout:
+                _debug_log(f"Daemon não respondeu em {DAEMON_TIMEOUT:.0f}s")
+                return ""
+            except Exception as e:
+                _debug_log(f"Falha de comunicação com o daemon ({e}), tentando local...")
+                self.use_daemon = False
+
+
+        if not self.model:
+            self._load_model()
+            
+        try:
+            segments, _ = self.model.transcribe(
+                wav_path,
+                beam_size=5,
+                language=self.config["language"],
+                vad_filter=True,
+                initial_prompt=self.config.get("initial_prompt", ""),
+                no_speech_threshold=self.config.get("no_speech_threshold", 0.6),
+                log_prob_threshold=self.config.get("log_prob_threshold", -1.0),
+                compression_ratio_threshold=self.config.get("compression_ratio_threshold", 2.4),
+                condition_on_previous_text=False,
+                temperature=0.0,
+            )
+            text = " ".join(s.text.strip() for s in segments)
+            return text.strip()
+        except Exception as e:
+
+            if self._device == "cuda":
+                _debug_log(f"CUDA transcribe local falhou ({e}), recriando modelo CPU")
+                try:
+                    from faster_whisper import WhisperModel
+                    self.model = WhisperModel(
+                        self.config["model"],
+                        device="cpu",
+                        compute_type="int8"
+                    )
+                    self._device = "cpu"
+                    segments, _ = self.model.transcribe(
+                        wav_path,
+                        beam_size=5,
+                        language=self.config["language"],
+                        vad_filter=True,
+                        initial_prompt=self.config.get("initial_prompt", ""),
+                        no_speech_threshold=self.config.get("no_speech_threshold", 0.6),
+                        log_prob_threshold=self.config.get("log_prob_threshold", -1.0),
+                        compression_ratio_threshold=self.config.get("compression_ratio_threshold", 2.4),
+                        condition_on_previous_text=False,
+                        temperature=0.0,
+                    )
+                    text = " ".join(s.text.strip() for s in segments)
+                    return text.strip()
+                except Exception:
+                    return ""
+            return ""
+
+
+def is_daemon_running():
+    if not os.path.exists(DAEMON_PID_FILE):
+        return False
+    try:
+        with open(DAEMON_PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def run_daemon(config):
+    """Inicializa o daemon do Whisper persistente."""
+
+    if is_daemon_running():
+        with open(DAEMON_PID_FILE) as f:
+            pid = int(f.read().strip())
+        print(f"Daemon já está rodando no PID {pid}")
+        sys.exit(0)
+    else:
+        try:
+            if os.path.exists(DAEMON_PID_FILE):
+                os.remove(DAEMON_PID_FILE)
+        except OSError:
+            pass
+
+
+    with open(DAEMON_PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+    _debug_log("=== DAEMON INICIADO ===")
+    
+
+
+    if os.path.exists(DAEMON_SOCKET):
+        try:
+            os.remove(DAEMON_SOCKET)
+        except OSError:
+            pass
+
+    try:
+        from faster_whisper import WhisperModel
+        device, compute = choose_device(config)
+        _debug_log(f"Daemon: Carregando modelo '{config['model']}' em {device} ({compute})...")
+        model = WhisperModel(
+            config["model"],
+            device=device,
+            compute_type=compute
+        )
+        _debug_log("Daemon: Modelo carregado e pronto.")
+    except Exception as e:
+        _debug_log(f"Daemon: Erro crítico ao carregar modelo: {e}")
+        try:
+            os.remove(DAEMON_PID_FILE)
+        except OSError:
+            pass
+        sys.exit(1)
+
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(DAEMON_SOCKET)
+    server.listen(5)
+    
+
+    os.chmod(DAEMON_SOCKET, 0o600)
+
+
+    def shutdown(signum, frame):
+        _debug_log("Daemon: Encerrando...")
+        server.close()
+        for f in [DAEMON_SOCKET, DAEMON_PID_FILE]:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        sys.exit(0)
+        
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    print("Daemon do Whisper iniciado no socket:", DAEMON_SOCKET)
+
+    while True:
+        try:
+            conn, _ = server.accept()
+            conn.settimeout(5.0)
+            req_data = conn.recv(16384)
+            if not req_data:
+                conn.close()
+                continue
+                
+            req = json.loads(req_data.decode('utf-8'))
+            action = req.get("action")
+            
+            if action == "transcribe":
+                wav_path = req.get("wav_path")
+                if not wav_path or not os.path.exists(wav_path):
+                    conn.sendall(json.dumps({"error": "WAV file not found"}).encode('utf-8'))
+                    conn.close()
+                    continue
+                
+                _debug_log(f"Daemon: Transcrevendo {wav_path}...")
+                t0 = time.time()
+                try:
+                    segments, _ = model.transcribe(
+                        wav_path,
+                        beam_size=5,
+                        language=req.get("language", config["language"]),
+                        vad_filter=True,
+                        initial_prompt=req.get("initial_prompt", ""),
+                        no_speech_threshold=req.get("no_speech_threshold", 0.6),
+                        log_prob_threshold=req.get("log_prob_threshold", -1.0),
+                        compression_ratio_threshold=req.get("compression_ratio_threshold", 2.4),
+                        condition_on_previous_text=req.get("condition_on_previous_text", False),
+                        temperature=req.get("temperature", 0.0),
+                    )
+                    text = " ".join(s.text.strip() for s in segments).strip()
+                    t1 = time.time()
+                    _debug_log(f"Daemon: Sucesso em {t1-t0:.2f}s -> {text[:100]}")
+                    conn.sendall(json.dumps({"text": text}).encode('utf-8'))
+                except Exception as ex:
+                    _debug_log(f"Daemon: Erro de transcrição: {ex}")
+                    conn.sendall(json.dumps({"error": str(ex)}).encode('utf-8'))
+            else:
+                conn.sendall(json.dumps({"error": "Unknown action"}).encode('utf-8'))
+            
+            conn.close()
+        except Exception as e:
+            _debug_log(f"Daemon: Erro no loop de conexão: {e}")

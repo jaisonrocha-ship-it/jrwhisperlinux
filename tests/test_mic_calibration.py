@@ -2,16 +2,11 @@
 """Calibração por mic e mic de reserva, sem áudio nem hardware."""
 import os
 import sys
-import importlib.machinery
-import importlib.util
 
 import numpy as np
 
-dictate_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../src/dictate"))
-loader = importlib.machinery.SourceFileLoader("dictate", dictate_path)
-spec = importlib.util.spec_from_loader("dictate", loader)
-d = importlib.util.module_from_spec(spec)
-loader.exec_module(d)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from jrwhisper import audio as d
 d.save_config = lambda config: None  # nunca toca ~/.config nos testes
 
 YETI = "alsa_input.usb-Logitech_Yeti_GX_2404SG0012M8-00.capture.0.0"
