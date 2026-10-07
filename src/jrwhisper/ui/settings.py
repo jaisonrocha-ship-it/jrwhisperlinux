@@ -17,8 +17,8 @@ import numpy as np
 from gi.repository import Gtk, Gdk, GLib
 
 from .. import history, shortcuts
-from ..audio import (AudioCapture, calibration_state, default_source_name, friendly_mic_name,
-                     list_source_names, resolve_mic, rms_db)
+from ..audio import (SYSTEM_AUDIO, AudioCapture, calibration_state, default_source_name, friendly_mic_name,
+                     is_system_audio, list_source_names, resolve_mic, rms_db)
 from ..config import DEFAULT_CONFIG, RUNTIME_DIR, _debug_log, save_config
 from ..paste import copy_text
 from ..transcribe import is_daemon_running
@@ -471,17 +471,22 @@ class SettingsWindow(Gtk.Window):
     def page_microphone(self):
         root, box = t.page("Microfone", "Entrada de áudio e calibração.")
         lb = t.group(box, "Entrada",
-                     "Se o microfone escolhido estiver desconectado, o ditado usa o padrão do sistema e avisa.")
+                     "Se o microfone escolhido estiver desconectado, o ditado usa o padrão do sistema e avisa. "
+                     "Som do computador transcreve o que está tocando (vídeo, reunião) direto da saída de áudio: "
+                     "não para nas pausas, termina no 2º toque do atalho ou na duração máxima.")
         options = [("@DEFAULT_SOURCE@", "Padrão do sistema")] + [(n, friendly_mic_name(n)) for n in list_source_names()]
-        self.mic_combo = t.choice_row(lb, "Microfone", None, options,
+        options.append((SYSTEM_AUDIO, "Som do computador"))
+        self.mic_combo = t.choice_row(lb, "Entrada", None, options,
                                       self.config.get("mic_device", "@DEFAULT_SOURCE@"), self._on_mic_changed)
         self.meter = LevelMeter(self._selected_mic, self.config.get("sample_rate", 16000))
-        t.row(lb, "Nível", "Fale para ver o sinal chegando.", self.meter)
+        t.row(lb, "Nível", "Fale (ou toque algo) para ver o sinal chegando.", self.meter)
+        self._shortcut_row(lb, "Atalho: som do computador", "Transcreve o que está tocando, sem mudar a entrada acima.",
+                           "Dictate: som do computador", f"{DICTATE_CMD} --system")
 
         lb = t.group(box, "Calibração", "Cada microfone guarda a própria calibração. Sem calibração, o ditado mede o "
                                         "ruído a cada uso.")
         self.cal_label = t.label("", "row-subtitle")
-        btn = Gtk.Button(label="Calibrar…")
+        btn = self.cal_btn = Gtk.Button(label="Calibrar…")
         btn.get_style_context().add_class("btn-primary")
         btn.connect("clicked", self._open_calibration)
         cal_box = Gtk.Box(spacing=12)
@@ -512,6 +517,10 @@ class SettingsWindow(Gtk.Window):
         self._refresh_cal()
 
     def _refresh_cal(self):
+        self.cal_btn.set_sensitive(not is_system_audio(self._selected_mic()))
+        if is_system_audio(self._selected_mic()):
+            self.cal_label.set_text("Não precisa: áudio digital")
+            return
         state, cal = calibration_state(self.config, self._selected_mic())
         text, color = {
             "ok": (f"Calibrado · limiar {cal['threshold']:.4f}" if cal else "", t.SUCCESS),

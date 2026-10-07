@@ -213,7 +213,7 @@ class Transcriber:
             _debug_log(f"Falha ao aplicar isolamento de voz: {e}")
         return wav_path
 
-    def transcribe_file(self, wav_path, denoise=True):
+    def transcribe_file(self, wav_path, denoise=True, second_pass=True):
         """Transcreve o arquivo WAV. Tenta via Daemon, fallback para local."""
         if not os.path.exists(wav_path):
             return ""
@@ -224,7 +224,7 @@ class Transcriber:
 
         try:
             text = self._clean(self._transcribe_internal(wav_path))
-            if not text and denoise:
+            if not text and second_pass:
                 text = self._second_pass(original_path)
             return text
         finally:

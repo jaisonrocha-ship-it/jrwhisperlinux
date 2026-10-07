@@ -12,7 +12,7 @@ import numpy as np
 from gi.repository import Gtk, GLib
 
 from .audio import (AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume,
-                    is_yeti, pause_media, resolve_mic, resume_media, set_volume, yeti_hw_problem)
+                    is_system_audio, is_yeti, pause_media, resolve_mic, resume_media, set_volume, yeti_hw_problem)
 from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text
@@ -56,6 +56,7 @@ class DictateThread(threading.Thread):
         self.pasted = False
         # waiting (nada dito) | listening | busy (transcrevendo/IA) | choosing (revisão com IA)
         self.stage = "waiting"
+        self.system = False       # gravando o som do computador, não o microfone
         self.finish_now = False   # 2º toque ouvindo: encerra o trecho e transcreve
         self.stop_after = False   # ...e não volta a ouvir (mãos livres)
 
@@ -78,7 +79,7 @@ class DictateThread(threading.Thread):
                 wf.setframerate(sr)
                 wf.writeframes((audio_snapshot * 32767).astype(np.int16).tobytes())
 
-            text = self.transcriber.transcribe_file(PARTIAL_WAV, denoise=False)
+            text = self.transcriber.transcribe_file(PARTIAL_WAV, denoise=False, second_pass=False)
             if text and self.recording_active:
                 if self.config.get("enable_formatting", True):
                     text = format_transcript(text, self.config)
@@ -116,13 +117,18 @@ class DictateThread(threading.Thread):
             sr = self.config["sample_rate"]
             manual = self.config.get("silence_threshold", 0)
             threshold = manual or calibrated_threshold(self.config, mic) or 0
+            # Som do computador: áudio digital (silêncio é zero), nada de calibrar, pausar ou abaixar
+            # justamente o que se quer transcrever.
+            self.system = is_system_audio(mic)
+            if self.system:
+                threshold = THRESHOLD_FLOOR
             keys = ptt.watcher_for(self.config)
             handsfree = bool(self.config.get("handsfree_enabled"))
 
-            if self.config.get("pause_media", True):
+            if self.config.get("pause_media", True) and not self.system:
                 self.paused_media = pause_media()
             play_sound(self.config, "start")  # antes do ducking, senão sai baixo demais
-            if self.config.get("audio_ducking", True):
+            if self.config.get("audio_ducking", True) and not self.system:
                 self.original_volume, _ = get_current_volume()
                 if self.original_volume is not None:
                     duck_vol = self.config.get("ducking_volume", 0.20)
@@ -137,6 +143,8 @@ class DictateThread(threading.Thread):
             if fell_back:
                 _debug_log(f"Mic configurado ausente; usando {mic}")
                 status = f"Mic ausente · usando {friendly_mic_name(mic)}"
+            elif self.system:
+                status = "Som do computador"
             else:
                 status = "Calibrando..."
             GLib.idle_add(self.overlay.update_status, status, "status-calibrating")
@@ -163,7 +171,8 @@ class DictateThread(threading.Thread):
                     GLib.idle_add(self.overlay.update_text, "", False)
                     GLib.idle_add(self.overlay.update_status, "Mãos livres · fale quando quiser", "status-waiting")
                 else:
-                    GLib.idle_add(self.overlay.update_status, "Aguardando voz...", "status-waiting")
+                    GLib.idle_add(self.overlay.update_status, "Aguardando som do computador..." if self.system
+                                  else "Aguardando voz...", "status-waiting")
 
                 audio, started, peak_rms = self._listen(capture, threshold, timeout, keys if push_to_talk else None)
                 if self.cancelled:
@@ -239,7 +248,8 @@ class DictateThread(threading.Thread):
                 if not started and speech_confirm_ticks >= SPEECH_START_TICKS:
                     started = True
                     self.stage = "listening"
-                    GLib.idle_add(self.overlay.update_status, "Ouvindo...", "status-listening")
+                    GLib.idle_add(self.overlay.update_status, "Ouvindo o computador · atalho encerra" if self.system
+                                  else "Ouvindo...", "status-listening")
                     pre_audio = capture.take_pre_buffer_clear_live()
                     if len(pre_audio) > 0:
                         all_audio = np.concatenate([all_audio, pre_audio])
@@ -257,7 +267,8 @@ class DictateThread(threading.Thread):
                 if not started and (now - recording_start) > timeout:
                     _debug_log(f"Timeout: {timeout}s sem fala")
                     break
-                if started and silence_counter >= silence_needed:
+                # som do computador: pausa de vídeo não encerra; termina no 2º toque ou na duração máxima
+                if started and silence_counter >= silence_needed and not self.system:
                     _debug_log(f"Silêncio detectado após {now - recording_start:.1f}s")
                     break
 
@@ -277,7 +288,7 @@ class DictateThread(threading.Thread):
                     self.partial_transcribing = True
                     last_partial_time = now
                     threading.Thread(target=self._run_partial_transcription,
-                                     args=(np.copy(all_audio), sr), daemon=True).start()
+                                     args=(np.copy(all_audio[-sr * 30:]), sr), daemon=True).start()  # a tela só mostra o fim
 
         self.recording_active = False
         self.stage = "busy"
@@ -293,7 +304,8 @@ class DictateThread(threading.Thread):
             if started:
                 msg = "Áudio muito curto"
             else:
-                msg = "Microfone sem sinal" if peak_rms == 0.0 else "Nenhuma fala detectada"
+                msg = ("Nada tocando no computador" if self.system else "Microfone sem sinal") if peak_rms == 0.0 \
+                    else "Nenhuma fala detectada"
                 if peak_rms < threshold:
                     # Nada chegou ao limiar: mute/ganho do Yeti explicam mais que "sem fala".
                     msg = (yeti_hw_problem() if is_yeti(mic) else None) or msg
@@ -313,7 +325,7 @@ class DictateThread(threading.Thread):
         except OSError:
             pass
 
-        raw_text = self.transcriber.transcribe_file(LAST_WAV)
+        raw_text = self.transcriber.transcribe_file(LAST_WAV, denoise=not self.system)  # RNNoise só piora áudio limpo
         stop = False
         if handsfree and raw_text:
             raw_text, stop = ptt.strip_stop_phrase(raw_text, self.config.get("handsfree_stop_phrase", ""))

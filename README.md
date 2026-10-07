@@ -48,6 +48,7 @@ Minimalista por padrão: um atalho, um orbe que reage à sua voz, o texto colado
 * **Perfis por aplicativo:** terminais colam com Ctrl+Shift+V, em minúscula e sem ponto final; chat sem ponto final; e-mail com pontuação completa. Regras editáveis por classe de janela.
 * **Atalhos de texto:** diga "minha assinatura" e o bloco inteiro entra no lugar.
 * **Histórico:** local (0600), com retenção configurável e busca estilo Spotlight (`dictate --history`; Enter cola).
+* **Som do computador:** transcreve o que está tocando (vídeo do YouTube, reunião) direto da saída de áudio, sem passar pelo microfone. Escolha "Som do computador" em Ajustes → Microfone ou use `dictate --system` com atalho próprio; não pausa nas pausas do vídeo, termina no 2º toque ou na duração máxima.
 * **Push-to-talk:** segure o atalho para falar e solte para enviar (X11).
 * **Mãos livres:** depois de colar, volta a ouvir; para com "parar ditado", silêncio longo ou o atalho (que antes transcreve o trecho em andamento).
 

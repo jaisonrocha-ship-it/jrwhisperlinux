@@ -258,7 +258,17 @@ def calibrate_threshold(capture, config):
     return float(threshold)
 
 
+# Saída de som do computador (monitor do alto-falante padrão): vídeo/áudio transcrito sem passar pelo ar.
+SYSTEM_AUDIO = "@DEFAULT_MONITOR@"
+
+
+def is_system_audio(mic):
+    return mic == SYSTEM_AUDIO or mic.endswith(".monitor")
+
+
 def friendly_mic_name(name):
+    if is_system_audio(name):
+        return "Som do computador"
     if name == "@DEFAULT_SOURCE@":
         return "Padrão do Sistema"
     if "usb-Logitech_Yeti_GX" in name:
@@ -292,12 +302,6 @@ def default_source_name():
         return None
 
 
-def list_mic_devices():
-    return [("@DEFAULT_SOURCE@", "Padrão do Sistema")] + [
-        (n, f"{friendly_mic_name(n)} ({n})") for n in list_source_names()
-    ]
-
-
 def resolve_mic(config):
     """Mic a usar agora: o configurado se conectado, senão o padrão do sistema.
 
@@ -305,6 +309,8 @@ def resolve_mic(config):
     calibração ficar presa ao mic físico. Sem resposta do pactl, confia no config.
     """
     wanted = config.get("mic_device", "@DEFAULT_SOURCE@")
+    if wanted == SYSTEM_AUDIO:
+        return wanted, False
     names = list_source_names()
     if wanted != "@DEFAULT_SOURCE@" and (wanted in names or not names):
         return wanted, False
