@@ -10,6 +10,8 @@ USO:
   dictate --status             → Mostra informações e status da ferramenta
   dictate --calibrate          → Mede ruído e voz, diagnostica o mic e salva o limiar
   dictate --calibrate-gui      → Mesma calibração em janela, com medidor ao vivo
+  dictate --mode <id>          → Dita já com um modo de IA (corrigir, email, mensagem, ingles, topicos)
+  dictate --history            → Busca rápida no histórico (Enter cola)
 
 v3.3 — 2026-07-03
   • Código limpo livre de comentários internos e estruturado para publicação no GitHub.
@@ -130,7 +132,15 @@ def main():
         return
 
     arg = flags[0]
-    if arg == "--daemon":
+    if arg == "--mode":
+        # dictate --mode email → ditado com esse modo de IA (para associar a um atalho próprio)
+        rest = [a for a in sys.argv[1:] if not a.startswith("-")]
+        run_overlay_mode(config, mode=rest[0] if rest else None)
+    elif arg == "--history":
+        from .ui.history_search import HistorySearch
+        HistorySearch(config).show_all()
+        Gtk.main()
+    elif arg == "--daemon":
         run_daemon(config)
     elif arg == "--status":
         show_status()

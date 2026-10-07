@@ -85,3 +85,26 @@ def format_transcript(text: str, config) -> str:
                 text = text[:match.start()].strip() + " " + match.group(1).strip()
 
     return text.strip()
+
+
+def apply_snippets(text, snippets):
+    """Troca gatilhos falados pela expansão ("minha assinatura" → bloco de texto).
+
+    Gatilhos mais longos primeiro, para "meu e-mail pessoal" vencer "meu e-mail".
+    A pontuação que o Whisper põe logo após o gatilho é absorvida.
+    """
+    for trigger in sorted(snippets or {}, key=len, reverse=True):
+        pattern = rf"(?<!\w){re.escape(trigger)}(?!\w)[.,;:!?]?"
+        text = re.sub(pattern, lambda _m, exp=snippets[trigger]: exp, text, flags=re.IGNORECASE)
+    return text
+
+
+def apply_case_rules(text, config):
+    """Regras do perfil que valem mesmo sem formatação (ex.: terminal: minúscula, sem ponto final)."""
+    if not text:
+        return text
+    if not config.get("capitalize", True) and not (len(text) > 1 and text[1].isupper()):
+        text = text[0].lower() + text[1:]  # preserva siglas ("API key")
+    if not config.get("final_period", True):
+        text = re.sub(r"(?<!\.)\.\s*$", "", text)
+    return text

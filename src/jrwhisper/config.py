@@ -70,7 +70,7 @@ DEFAULT_CONFIG = {
     # Inteligência (reescrita com IA). A chave da API fica no keyring, nunca aqui.
     "ai_enabled": False,
     "ai_provider": "nvidia",
-    "ai_model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "ai_model": "nvidia/nemotron-3-super-120b-a12b",
     "ai_ollama_url": "http://localhost:11434",
     "ai_ollama_model": "llama3.2",
     "ai_default_mode": "",
@@ -82,7 +82,8 @@ DEFAULT_CONFIG = {
                    "Responda só com o texto corrigido."},
         {"id": "email", "name": "E-mail", "enabled": True,
          "prompt": "Reescreva o texto ditado como um e-mail profissional e cordial em português, com saudação e "
-                   "despedida curtas. Não invente fatos. Responda só com o e-mail."},
+                   "despedida curtas. Não invente fatos nem nomes. Termine em \"Atenciosamente,\" sem assinatura "
+                   "nem marcadores como [Seu nome]. Responda só com o e-mail."},
         {"id": "mensagem", "name": "Mensagem", "enabled": True,
          "prompt": "Reescreva o texto ditado como uma mensagem curta e natural de chat, mantendo o sentido. "
                    "Responda só com a mensagem."},

@@ -633,13 +633,10 @@ class SettingsWindow(Gtk.Window):
         change.connect("clicked", change_key)
         kb.pack_start(change, False, False, 0)
         provider_rows["nvidia_key"] = t.row(lb, "Chave de API", "Guardada no chaveiro do sistema (gnome-keyring).", kb)
-        self.ai_model_combo = t.PopupChoice()
-        self.ai_model_combo.append(self.config.get("ai_model"), self.config.get("ai_model"))
-        self.ai_model_combo.set_active_id(self.config.get("ai_model"))
-        self.ai_model_combo.connect("changed", lambda c: c.get_active_id() and self.set("ai_model", c.get_active_id()))
-        provider_rows["nvidia_model"] = t.row(lb, "Modelo", "Modelos rápidos deixam o ditado mais fluido.",
-                                              self.ai_model_combo)
-        self._load_models_async()
+        from .. import ai
+        provider_rows["nvidia_model"] = t.choice_row(
+            lb, "Modelo", "Testados com a sua chave; os mais rápidos deixam o ditado fluido.", ai.RECOMMENDED,
+            self.config.get("ai_model"), lambda v: self.set("ai_model", v)).get_ancestor(Gtk.ListBoxRow)
         provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
             "ai_ollama_url", "http://localhost:11434"))
         provider_rows["ollama_model"] = t.row(lb, "Modelo do Ollama", None, self._entry("ai_ollama_model", "llama3.2"))
@@ -678,23 +675,6 @@ class SettingsWindow(Gtk.Window):
         for name, r in rows.items():
             r.set_visible(name.startswith("ollama") == ollama)
         return False
-
-    def _load_models_async(self):
-        def work():
-            try:
-                from .. import ai
-                models = ai.list_models(self.config)
-            except Exception as e:
-                _debug_log(f"IA: lista de modelos falhou: {e}")
-                models = []
-            GLib.idle_add(fill, models)
-
-        def fill(models):
-            current = self.config.get("ai_model")
-            for m in models:
-                if m != current:
-                    self.ai_model_combo.append(m, m)
-        threading.Thread(target=work, daemon=True).start()
 
     def _test_ai(self, label):
         label.set_text("Testando…")

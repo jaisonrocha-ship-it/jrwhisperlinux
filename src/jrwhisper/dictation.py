@@ -1,3 +1,4 @@
+import random
 import sys
 import os
 import signal
@@ -11,7 +12,9 @@ from gi.repository import Gtk, GLib
 
 from .audio import AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume, is_yeti, resolve_mic, set_volume, yeti_hw_problem
 from .config import CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS, TICK_INTERVAL, _debug_log
-from .paste import get_display_server
+from .paste import paste_text
+from .profiles import window_class
+from . import history, pipeline
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -34,11 +37,13 @@ def play_sound(config, name):
 
 
 class DictateThread(threading.Thread):
-    def __init__(self, overlay, config, active_win=None):
+    def __init__(self, overlay, config, active_win=None, wm_class=None, mode=None):
         super().__init__(daemon=True)
         self.overlay = overlay
         self.config = config
         self.active_win = active_win
+        self.wm_class = wm_class
+        self.mode = mode  # modo de IA forçado por atalho (dictate --mode <id>)
         self.cancelled = False
         self.partial_transcribing = False
         self.recording_active = True
@@ -71,69 +76,16 @@ class DictateThread(threading.Thread):
             Gtk.main_quit()
         self.overlay.fade_out(_done)
 
-    def _paste_text(self, text, active_win):
-        """Cola texto na janela ativa de forma compatível com X11 e Wayland."""
-        display_server = get_display_server()
-        _debug_log(f"Colando texto no {display_server}...")
-        
-        if display_server == "wayland":
-            try:
-
-                proc = subprocess.Popen(
-                    ["wl-copy"],
-                    stdin=subprocess.PIPE
-                )
-                proc.communicate(input=text.encode("utf-8"), timeout=3)
-                
-
-                subprocess.run([
-                    "wtype", "-M", "ctrl", "-k", "v"
-                ], timeout=3)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-
-                try:
-                    subprocess.run([
-                        "wtype", "--", text
-                    ], timeout=10)
-                except Exception as e:
-                    _debug_log(f"Falha ao colar no Wayland: {e}")
-        else:
-
-            try:
-                proc = subprocess.Popen(
-                    ["xclip", "-selection", "clipboard"],
-                    stdin=subprocess.PIPE
-                )
-                proc.communicate(input=text.encode("utf-8"), timeout=3)
-
-                if active_win:
-                    subprocess.run([
-                        "xdotool", "windowfocus", "--sync", active_win
-                    ], timeout=2)
-                    time.sleep(0.1)
-
-                subprocess.run([
-                    "xdotool", "key", "--clearmodifiers", "ctrl+v"
-                ], timeout=3)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-
-                try:
-                    if active_win:
-                        subprocess.run([
-                            "xdotool", "windowfocus", "--sync", active_win
-                        ], timeout=2)
-                        time.sleep(0.1)
-                        subprocess.run([
-                            "xdotool", "type", "--window", active_win,
-                            "--clearmodifiers", "--delay", "2", "--", text
-                        ], timeout=10)
-                    else:
-                        subprocess.run([
-                            "xdotool", "type", "--clearmodifiers", "--delay", "2",
-                            "--", text
-                        ], timeout=10)
-                except Exception as e:
-                    _debug_log(f"Falha ao colar no X11: {e}")
+    def _remember(self, raw_text, result):
+        if not self.config.get("history_enabled"):
+            return
+        try:
+            history.add({"text": result.text, "raw": raw_text, "app": self.wm_class or "",
+                         "mode": result.mode["name"] if result.mode else ""})
+            if random.random() < 0.05:  # poda ocasional; não vale ler o arquivo todo a cada ditado
+                history.prune(self.config.get("history_retention_days", 30))
+        except OSError as e:
+            _debug_log(f"Histórico: {e}")
 
     def run(self):
         try:
@@ -294,23 +246,25 @@ class DictateThread(threading.Thread):
                 except OSError:
                     pass
 
-                final_text = self.transcriber.transcribe_file(LAST_WAV)
+                raw_text = self.transcriber.transcribe_file(LAST_WAV)
 
-                if final_text:
-
-                    if self.config.get("enable_formatting", True):
-                        formatted_text = format_transcript(final_text, self.config)
-                        _debug_log(f"Formatador: {repr(final_text)} -> {repr(formatted_text)}")
-                        final_text = formatted_text
-
-                    _debug_log(f"Texto: {final_text}")
+                if raw_text:
+                    result = pipeline.process(
+                        self.config, raw_text, wm_class=self.wm_class, forced_mode=self.mode,
+                        on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+                    final_text = result.text
+                    _debug_log(f"Texto: {raw_text!r} -> {final_text!r}")
                     GLib.idle_add(self.overlay.update_text, final_text, True)
-
-
-                    self._paste_text(final_text, active_win)
+                    paste_text(final_text, active_win, result.config.get("paste_method", "ctrl+v"))
                     self.pasted = True
-
-                    GLib.idle_add(self.overlay.update_status, "Texto colado!", "status-success")
+                    self._remember(raw_text, result)
+                    if result.ai_error:
+                        status = "Colado sem IA"
+                    elif result.mode:
+                        status = f"Colado · {result.mode['name']}"
+                    else:
+                        status = "Texto colado!"
+                    GLib.idle_add(self.overlay.update_status, status, "status-success")
                 else:
                     audio_rms = float(np.sqrt(np.mean(all_audio**2)))
                     _debug_log(f"Nenhuma fala reconhecida (RMS={audio_rms:.4f})")
@@ -380,7 +334,7 @@ def is_running():
         return False
 
 
-def run_overlay_mode(config):
+def run_overlay_mode(config, mode=None):
 
     lock_file = PID_FILE + ".lock"
     lock_fd = open(lock_file, 'w')
@@ -425,7 +379,7 @@ def run_overlay_mode(config):
         overlay = WhisperFlowOverlay(config)
         overlay.show_all()
 
-        thread = DictateThread(overlay, config, active_win=active_win)
+        thread = DictateThread(overlay, config, active_win=active_win, wm_class=window_class(active_win), mode=mode)
         overlay.dictate_thread = thread
         thread.start()
 
