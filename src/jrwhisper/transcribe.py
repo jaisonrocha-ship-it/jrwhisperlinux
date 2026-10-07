@@ -206,10 +206,11 @@ class Transcriber:
             wav_path = self._denoise_file(wav_path)
 
         try:
-            text = self._transcribe_internal(wav_path)
-            if is_hallucination(text):
-                _debug_log(f"Alucinação descartada: {text!r}")
-                return ""
+            text = self._clean(self._transcribe_internal(wav_path))
+            if not text and wav_path != original_path:
+                # O RNNoise apaga música, e voz cantada vai junto: sem nada, tenta o áudio original.
+                _debug_log("Nada após o RNNoise; transcrevendo o áudio original")
+                text = self._clean(self._transcribe_internal(original_path))
             return text
         finally:
             if wav_path != original_path and os.path.exists(wav_path):
@@ -217,6 +218,13 @@ class Transcriber:
                     os.remove(wav_path)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _clean(text):
+        if is_hallucination(text):
+            _debug_log(f"Alucinação descartada: {text!r}")
+            return ""
+        return text
 
     def _transcribe_internal(self, wav_path):
         """Lógica interna de transcrição (Daemon / Local)."""

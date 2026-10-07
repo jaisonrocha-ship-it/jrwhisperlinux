@@ -16,6 +16,22 @@ def test_rnnoise_resolves_repo_model():
     print(f"RNNoise: {path}")
 
 
+def test_singing_survives_rnnoise():
+    """RNNoise apaga voz cantada (música no celular): sem texto, transcreve o áudio original."""
+    import tempfile
+    t = transcribe.Transcriber.__new__(transcribe.Transcriber)
+    t.config = {"noise_suppression": True}
+    seen = []
+    t._denoise_file = lambda p: p + ".denoised.wav"
+    t._transcribe_internal = lambda p: seen.append(p) or ("" if p.endswith(".denoised.wav") else "I think I love you")
+    with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+        assert t.transcribe_file(f.name) == "I think I love you"
+        assert seen == [f.name + ".denoised.wav", f.name]
+        seen.clear()
+        t._transcribe_internal = lambda p: seen.append(p) or "Olá, tudo bem?"
+        assert t.transcribe_file(f.name) == "Olá, tudo bem?" and len(seen) == 1  # fala normal: uma passada só
+
+
 def test_prebuffer_without_wait_overlap():
     cap = audio.AudioCapture("@DEFAULT_SOURCE@", sr=16000)
     chunk_a = b"\x00\x10" * 512  # 1024 bytes, like parec
@@ -45,7 +61,7 @@ def test_prebuffer_without_wait_overlap():
 
 def run_tests():
     failed = False
-    for fn in (test_rnnoise_resolves_repo_model, test_prebuffer_without_wait_overlap):
+    for fn in (test_rnnoise_resolves_repo_model, test_singing_survives_rnnoise, test_prebuffer_without_wait_overlap):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
