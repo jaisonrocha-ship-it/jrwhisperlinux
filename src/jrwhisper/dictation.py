@@ -15,6 +15,7 @@ from .paste import get_display_server
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
+from .ui.visuals import spectrum_bands
 
 
 class DictateThread(threading.Thread):
@@ -184,6 +185,8 @@ class DictateThread(threading.Thread):
                 rms = capture.get_rms()
                 peak_rms = max(peak_rms, rms)
                 GLib.idle_add(self.overlay.update_level, rms, threshold)
+                if self.overlay.wants_spectrum:
+                    GLib.idle_add(self.overlay.update_spectrum, spectrum_bands(capture.recent_samples(), sr))
 
                 now = time.time()
 
@@ -399,7 +402,7 @@ def run_overlay_mode(config):
         except Exception:
             active_win = None
 
-        overlay = WhisperFlowOverlay()
+        overlay = WhisperFlowOverlay(config)
         overlay.show_all()
 
         thread = DictateThread(overlay, config, active_win=active_win)

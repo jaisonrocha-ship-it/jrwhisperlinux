@@ -1,31 +1,6 @@
 import re
 
 
-def wrap_text_to_lines(text, max_chars=45):
-    paragraphs = text.split('\n')
-    lines = []
-    for para in paragraphs:
-        if not para:
-            lines.append("")
-            continue
-        words = para.split()
-        current_line = []
-        current_length = 0
-        for word in words:
-            addition = len(word) + (1 if current_line else 0)
-            if current_length + addition <= max_chars:
-                current_line.append(word)
-                current_length += addition
-            else:
-                if current_line:
-                    lines.append(" ".join(current_line))
-                current_line = [word]
-                current_length = len(word)
-        if current_line:
-            lines.append(" ".join(current_line))
-    return lines
-
-
 def format_transcript(text: str, config) -> str:
     if not text:
         return ""

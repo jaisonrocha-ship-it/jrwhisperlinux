@@ -137,6 +137,12 @@ class AudioCapture:
             self.buffer.clear()
         return _pcm16le_to_float32(data)
 
+    def recent_samples(self, n=1024):
+        """Últimas n amostras do anel de pré-buffer (para o espectro do visual de Barras)."""
+        with self._lock:
+            data = b''.join(self._pre_buffer)
+        return _pcm16le_to_float32(data[-2 * n:])
+
     def get_rms(self):
         return self.current_rms
 

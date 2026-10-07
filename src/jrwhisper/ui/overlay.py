@@ -1,315 +1,171 @@
-import cairo
+"""HUD do ditado: visual (Orbe/Ondas/Barras) + status + texto, tudo em Cairo/Pango.
+
+Sem widgets GTK dentro: o tema do sistema não interfere e a janela é
+click-through, exceto a engrenagem (input shape só nela).
+API usada pelo DictateThread: update_level, update_spectrum, update_status,
+update_text, fade_out, dictate_thread, wants_spectrum.
+"""
 import math
-from gi.repository import Gtk, Gdk, GLib, GdkPixbuf
+
+import cairo
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 from ..config import _debug_log, load_config
-from ..textproc import wrap_text_to_lines
-from .settings import SettingsWindow
+from .visuals import _icon_pixbuf, make_visual, rounded_rect
 
-
-OVERLAY_BG = (10/255, 10/255, 12/255, 0.62)
-
-CSS = """
-.overlay {
-    background-color: rgba(10, 10, 12, 0.62);
-    border: none;
-    border-radius: 16px;
-    padding: 16px;
-    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.12),
-                inset 0 -1px 0 0 rgba(255, 255, 255, 0.05);
+# classe CSS antiga (vinda do DictateThread) → estado do visual
+STATES = {
+    "status-calibrating": "calibrating",
+    "status-waiting": "waiting",
+    "status-listening": "listening",
+    "status-transcribing": "transcribing",
+    "status-success": "success",
+    "status-error": "error",
 }
-.status-label {
-    color: rgba(255, 255, 255, 0.65);
-    font-size: 10px;
-    font-family: 'Inter', sans-serif;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-}
-.status-calibrating {
-    color: rgba(255, 200, 60, 0.8);
-}
-.status-waiting {
-    color: rgba(255, 255, 255, 0.65);
-}
-.status-listening {
-    color: rgba(100, 220, 255, 0.9);
-}
-.status-transcribing {
-    color: rgba(200, 170, 255, 0.9);
-}
-.status-success {
-    color: rgba(100, 255, 160, 0.9);
-}
-.status-error {
-    color: rgba(255, 120, 100, 0.85);
-}
-.text-display {
-    color: rgba(255, 255, 255, 0.95);
-    font-size: 13.5px;
-    font-family: 'Inter', sans-serif;
-    font-weight: 400;
-}
-.partial-text {
-    color: rgba(255, 255, 255, 0.6);
-    font-style: italic;
-}
-.final-text {
-    color: #FFFFFF;
-    font-weight: 600;
-}
-"""
 
 
-class SiriWaveform(Gtk.DrawingArea):
-    def __init__(self):
-        super().__init__()
-        self.set_size_request(410, 42)
-        self.phase = 0.0
-        self.amplitude = 0.02
-        self.target_amplitude = 0.02
-        self.set_margin_bottom(10)
-        
-
-        self.connect("draw", self.on_draw)
-        
-
-        GLib.timeout_add(16, self._tick)
-
-    def _tick(self):
-        self.phase += 0.15
-
-        self.amplitude = self.amplitude * 0.82 + self.target_amplitude * 0.18
-        self.queue_draw()
-        return True
-
-    def set_rms(self, rms, threshold):
-
-        max_possible = max(threshold * 4, 0.01)
-        val = min(rms / max_possible, 1.0)
-
-        self.target_amplitude = max(val * 0.9, 0.04)
-
-    def on_draw(self, widget, cr):
-        width = widget.get_allocated_width()
-        height = widget.get_allocated_height()
-        mid_y = height / 2.0
-        
-
-        cr.set_source_rgba(*OVERLAY_BG)
-        cr.set_operator(cairo.OPERATOR_SOURCE)
-        cr.paint()
-        cr.set_operator(cairo.OPERATOR_OVER)
-        
-
-
-        waves = [
-
-            (0.012, 0.0, 1.0, 0.85, 2.5, "main"),
-            (0.022, 1.8, 0.6, 0.45, 1.5, "electric"),
-            (0.008, -1.5, 0.35, 0.20, 1.0, "warm")
-        ]
-        
-        for freq, phase_offset, amp_mult, opacity, line_w, grad_type in waves:
-
-            gradient = cairo.LinearGradient(0, 0, width, 0)
-            
-            if grad_type == "main":
-
-                shift = 0.05 * math.sin(self.phase * 0.3)
-                gradient.add_color_stop_rgba(0.0, 0.0, 0.48, 1.0, opacity)
-                gradient.add_color_stop_rgba(0.5 + shift, 0.69, 0.32, 0.87, opacity)
-                gradient.add_color_stop_rgba(1.0, 1.0, 0.18, 0.33, opacity)
-            elif grad_type == "electric":
-
-                shift = 0.07 * math.cos(self.phase * 0.4)
-                gradient.add_color_stop_rgba(0.0, 0.0, 0.95, 1.0, opacity)
-                gradient.add_color_stop_rgba(0.4 + shift, 0.0, 0.72, 0.92, opacity)
-                gradient.add_color_stop_rgba(1.0, 0.48, 0.22, 0.95, opacity)
-            else:
-
-                shift = 0.04 * math.sin(self.phase * 0.2)
-                gradient.add_color_stop_rgba(0.0, 0.60, 0.12, 0.85, opacity)
-                gradient.add_color_stop_rgba(0.6 + shift, 0.95, 0.15, 0.42, opacity)
-                gradient.add_color_stop_rgba(1.0, 1.0, 0.38, 0.10, opacity)
-            
-            cr.set_source(gradient)
-            cr.set_line_width(line_w)
-            
-            cr.new_path()
-            first = True
-            
-            for x in range(0, width + 4, 4):
-
-                envelope = math.sin((x / width) * math.pi)
-                
-                y = mid_y + (self.amplitude * (height * 0.45) * amp_mult * envelope * 
-                             math.sin(x * freq + self.phase + phase_offset))
-                
-                if first:
-                    cr.move_to(x, y)
-                    first = False
-                else:
-                    cr.line_to(x, y)
-
-            
-            cr.stroke()
-
-
-
-
+def _status_text(text):
+    text = text.strip()
+    if text.endswith("..."):
+        text = text[:-3] + "…"
+    return text.rstrip("!")
 
 
 class WhisperFlowOverlay(Gtk.Window):
-    def __init__(self):
-        Gtk.Window.__init__(self, type=Gtk.WindowType.POPUP)
+    MAX_LINES = 3
 
+    def __init__(self, config=None):
+        Gtk.Window.__init__(self, type=Gtk.WindowType.POPUP)
+        config = config or load_config()
         self.set_title("Dictate")
         self.set_keep_above(True)
         self.set_decorated(False)
         self.set_skip_taskbar_hint(True)
         self.set_accept_focus(False)
         self.set_opacity(0.0)
-
-
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
         if visual and screen.is_composited():
             self.set_visual(visual)
         self.set_app_paintable(True)
 
+        self.visual = make_visual(config)
+        self.wants_spectrum = config.get("overlay_style") == "bars"
+        self.show_text = bool(config.get("overlay_show_text", True))
+        position = config.get("overlay_position", "bottom")
+        s = self.scale = self.visual.scale
 
+        self.vw, self.vh = self.visual.size()
+        self.text_w = 440 * s
+        self.font_px = 14.5 * s
+        self.line_h = self.font_px * 1.45
+        self.text_pad = 12 * s
+        text_max_h = (2 * self.text_pad + self.line_h * self.MAX_LINES) if self.show_text else 0
+        status_h = 24 * s
+        gap = 10 * s
+        self.W = int(max(self.vw, self.text_w) + 48 * s)
+        self.H = int(self.vh + status_h + (text_max_h + gap if self.show_text else 0) + 16 * s)
+        self.set_size_request(self.W, self.H)
+        self.resize(self.W, self.H)
 
-        self.connect("draw", self.on_window_draw)
+        # Embaixo da tela o texto cresce para cima (acima do visual); no resto, para baixo.
+        self.text_above = position == "bottom"
+        self.cx = self.W / 2
+        if self.text_above:
+            self.text_anchor = text_max_h + 8 * s           # base do bloco de texto
+            self.cy = self.text_anchor + gap + self.vh / 2
+        else:
+            self.cy = 8 * s + self.vh / 2
+            self.text_anchor = self.cy + self.vh / 2 + status_h + gap  # topo do bloco de texto
+        self.status_y = self.cy + self.vh / 2 + 4 * s
 
+        # engrenagem (único ponto clicável)
+        if config.get("overlay_style", "orb") == "orb":
+            gx, gy = self.cx + self.vw / 2 - 30 * s, self.cy - self.vh / 2 + 18 * s
+        else:
+            gx, gy = self.cx + self.vw / 2 + 6 * s, self.cy - 8 * s
+        self.gear = (int(gx), int(gy), int(16 * s) + 6, int(16 * s) + 6)
+        self.gear_icon = _icon_pixbuf("settings", int(15 * s), stroke=1.8)
 
-        self.set_default_size(450, -1)
-        self.set_size_request(450, -1)
+        self.status = "Iniciando…"
+        self.text = ""
+        self.final = False
+        self.text_alpha = 0.0
+        self.box_h = 0.0
+        self._final_text = ""
+        self.dictate_thread = None
+        self._last_frame = None
 
+        self._place(screen, position)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("button-press-event", self._on_press)
+        self.connect("draw", self._on_draw)
+        self.connect("realize", self._on_realize)
+        self.add_tick_callback(self._on_tick)
+        self.fade_in()
+
+    # ── posição e entrada ──────────────────────────────────────────
+    def _place(self, screen, position):
         display = screen.get_display()
-
         try:
-            seat = display.get_default_seat()
-            pointer = seat.get_pointer()
-            _, x, y = pointer.get_position()
+            _, x, y = display.get_default_seat().get_pointer().get_position()
             monitor = display.get_monitor_at_point(x, y)
         except Exception:
             monitor = display.get_primary_monitor()
-            
         geo = monitor.get_geometry()
+        x = geo.x + (geo.width - self.W) // 2
+        if position == "top":
+            y = geo.y + 48
+        elif position == "center":
+            y = geo.y + (geo.height - self.H) // 2
+        else:
+            y = geo.y + geo.height - self.H - 56
+        self.move(x, y)
 
-        self.move(
-            geo.x + (geo.width - 450) // 2,
-            geo.y + geo.height - 310
-        )
+    def _on_realize(self, _w):
+        # Click-through: só a engrenagem recebe clique.
+        self.input_shape_combine_region(cairo.Region(cairo.RectangleInt(*self.gear)))
 
-
-        style_provider = Gtk.CssProvider()
-        style_provider.load_from_data(CSS.encode())
-        Gtk.StyleContext.add_provider_for_screen(
-            screen, style_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-
-
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.main_box.set_margin_top(16)
-        self.main_box.set_margin_bottom(16)
-        self.main_box.set_margin_start(18)
-        self.main_box.set_margin_end(18)
-        self.main_box.get_style_context().add_class('overlay')
-
-        self.waveform = SiriWaveform()
-        self.main_box.pack_start(self.waveform, False, False, 0)
-
-        # Linha horizontal de status contendo label na esquerda e ícone discreto na direita
-        status_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        status_box.set_hexpand(True)
-
-        self.status_label = Gtk.Label(label="Iniciando...")
-        self.status_label.get_style_context().add_class('status-label')
-        self.status_label.set_halign(Gtk.Align.START)
-        status_box.pack_start(self.status_label, False, False, 0)
-
-        # SVG do ícone de engrenagem de configuração (opacidade 0.35 para ser bem discreto)
-        svg_overlay_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.35">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>"""
-
-        try:
-            loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
-            loader.set_size(14, 14)
-            loader.write(svg_overlay_icon.encode('utf-8'))
-            loader.close()
-            pixbuf_overlay = loader.get_pixbuf()
-            img_icon = Gtk.Image.new_from_pixbuf(pixbuf_overlay)
-            img_icon.set_halign(Gtk.Align.END)
-            img_icon.set_valign(Gtk.Align.CENTER)
-
-            # EventBox para tornar o ícone clicável
-            event_box = Gtk.EventBox()
-            event_box.set_visible_window(False)
-            event_box.add(img_icon)
-            event_box.connect("button-press-event", self.on_settings_icon_clicked)
-
-            # Alterar cursor para pointer (mãozinha)
-            event_box.connect("realize", lambda widget: widget.get_window().set_cursor(
-                Gdk.Cursor.new_from_name(widget.get_display(), "pointer")
-            ))
-
-            status_box.pack_end(event_box, False, False, 0)
-        except Exception as e:
-            _debug_log(f"Falha ao carregar ícone SVG do overlay: {e}")
-
-        self.main_box.pack_start(status_box, False, False, 0)
-
-        self.text_label = Gtk.Label(label="")
-        self.text_label.get_style_context().add_class('text-display')
-        self.text_label.set_halign(Gtk.Align.START)
-        self.text_label.set_line_wrap(True)
-        self.text_label.set_max_width_chars(45)
-        self.text_label.set_use_markup(True)
-        self.main_box.pack_start(self.text_label, True, True, 0)
-
-        self.add(self.main_box)
-        self._final_text = ""
-        self.dictate_thread = None
-        
-
-        self.fade_in()
-
-    def on_window_draw(self, widget, cr):
-
-
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0)
-        cr.set_operator(cairo.OPERATOR_SOURCE)
-        cr.paint()
-        return False
+    def _on_press(self, _w, event):
+        gx, gy, gw, gh = self.gear
+        if gx <= event.x <= gx + gw and gy <= event.y <= gy + gh:
+            self.on_settings_icon_clicked(None, event)
+        return True
 
     def on_settings_icon_clicked(self, widget, event):
         _debug_log("Settings icon clicked: opening SettingsWindow")
-        if hasattr(self, 'dictate_thread') and self.dictate_thread:
+        if self.dictate_thread:
             self.dictate_thread.cancelled = True
-        
-        config = load_config()
-        win = SettingsWindow(config)
-        win.show_all()
+        from .settings import SettingsWindow  # import tardio: não pesa na abertura do overlay
+        SettingsWindow(load_config()).show_all()
         self.destroy()
+
+    # ── animação ───────────────────────────────────────────────────
+    def _on_tick(self, widget, clock):
+        now = clock.get_frame_time() / 1e6
+        dt = min(now - self._last_frame, 0.05) if self._last_frame else 1 / 60
+        self._last_frame = now
+        self.visual.advance(dt)
+        k = 1 - math.exp(-dt * 10)
+        self.text_alpha += ((1.0 if self.text else 0.0) - self.text_alpha) * k
+        self.box_h += (self._target_box_h() - self.box_h) * k
+        self.queue_draw()
+        return True
 
     def fade_in(self):
         self._fade_val = 0.0
-        
+
         def _step():
             if self._fade_val < 1.0:
                 self._fade_val += 0.10
                 self.set_opacity(min(self._fade_val, 1.0))
                 return True
             return False
-            
         GLib.timeout_add(14, _step)
 
     def fade_out(self, callback):
         self._fade_val = self.get_opacity()
-        
+
         def _step():
             if self._fade_val > 0.0:
                 self._fade_val -= 0.10
@@ -317,60 +173,121 @@ class WhisperFlowOverlay(Gtk.Window):
                 return True
             callback()
             return False
-            
         GLib.timeout_add(14, _step)
 
+    # ── API do DictateThread ───────────────────────────────────────
     def update_level(self, rms, threshold):
-        """Atualiza a onda baseada no RMS."""
-        self.waveform.set_rms(rms, threshold)
+        # Fala típica fica ~4× acima do limiar calibrado.
+        self.visual.set_level(min(rms / max(threshold * 4, 0.004), 1.0))
+
+    def update_spectrum(self, bands):
+        self.visual.set_bands(bands)
 
     def update_status(self, text, css_state=None):
-        self.status_label.set_text(text.upper())
-        ctx = self.status_label.get_style_context()
-        for cls in ['status-calibrating', 'status-waiting', 'status-listening',
-                    'status-transcribing', 'status-success', 'status-error']:
-            ctx.remove_class(cls)
-        if css_state:
-            ctx.add_class(css_state)
+        self.status = _status_text(text)
+        if css_state in STATES:
+            self.visual.set_state(STATES[css_state])
 
     def update_text(self, text, final=False):
-        import html
-        lines = wrap_text_to_lines(text, max_chars=45)
-        lines_to_show = lines[-3:]
-        while len(lines_to_show) < 3:
-            lines_to_show.insert(0, "")
-            
-        markup_lines = []
-        
-
-        if lines_to_show[0]:
-            escaped = html.escape(lines_to_show[0])
-            markup_lines.append(f'<span foreground="#FFFFFF40">{escaped}</span>')
-        else:
-            markup_lines.append('<span foreground="#FFFFFF00"> </span>')
-            
-
-        if lines_to_show[1]:
-            escaped = html.escape(lines_to_show[1])
-            markup_lines.append(f'<span foreground="#FFFFFF99">{escaped}</span>')
-        else:
-            markup_lines.append('<span foreground="#FFFFFF00"> </span>')
-            
-
-        if lines_to_show[2]:
-            escaped = html.escape(lines_to_show[2])
-            if not final:
-                markup_lines.append(f'<span foreground="#FFFFFFF2"><i>{escaped}</i></span>')
-            else:
-                markup_lines.append(f'<span foreground="#FFFFFF"><b>{escaped}</b></span>')
-        else:
-            markup_lines.append('<span foreground="#FFFFFF00"> </span>')
-            
-        markup_text = "\n".join(markup_lines)
-        self.text_label.set_markup(markup_text)
-        
+        if not self.show_text:
+            return
+        self.text = text
+        self.final = final
         if final:
             self._final_text = text
 
     def get_final_text(self):
         return self._final_text
+
+    # ── desenho ────────────────────────────────────────────────────
+    def _layout(self, cr, text, px, weight=Pango.Weight.NORMAL, width=None):
+        layout = PangoCairo.create_layout(cr)
+        fd = Pango.FontDescription.from_string("Inter")
+        fd.set_absolute_size(px * Pango.SCALE)
+        fd.set_weight(weight)
+        layout.set_font_description(fd)
+        layout.set_alignment(Pango.Alignment.CENTER)
+        if width:
+            layout.set_width(int(width * Pango.SCALE))
+            layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+        layout.set_text(text, -1)
+        return layout
+
+    def _visible_lines(self, cr):
+        """Últimas MAX_LINES linhas do texto quebrado pelo Pango (quebra real, não por caracteres)."""
+        if not self.text:
+            return []
+        layout = self._layout(cr, self.text, self.font_px, width=self.text_w - 2 * self.text_pad)
+        raw = self.text.encode()
+        lines = [raw[ln.start_index:ln.start_index + ln.length].decode(errors="ignore").strip()
+                 for ln in layout.get_lines_readonly()]
+        return [ln for ln in lines if ln][-self.MAX_LINES:]
+
+    def _target_box_h(self):
+        if not self.text:
+            return 0.0
+        n = getattr(self, "_n_lines", 1)
+        return 2 * self.text_pad + self.line_h * n
+
+    def _on_draw(self, _w, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+
+        self.visual.draw(cr, self.cx, self.cy)
+
+        # status
+        if self.status:
+            lay = self._layout(cr, self.status, 11.5 * self.scale, Pango.Weight.MEDIUM)
+            w, h = lay.get_pixel_size()
+            px, py = 9 * self.scale, 3 * self.scale
+            # pílula escura: legível sobre qualquer coisa atrás
+            rounded_rect(cr, self.cx - w / 2 - px, self.status_y - py, w + 2 * px, h + 2 * py, (h + 2 * py) / 2)
+            cr.set_source_rgba(0.09, 0.09, 0.11, 0.78)
+            cr.fill()
+            cr.move_to(self.cx - w / 2, self.status_y)
+            cr.set_source_rgba(1, 1, 1, 0.78)
+            PangoCairo.show_layout(cr, lay)
+
+        # engrenagem discreta
+        gx, gy, gw, gh = self.gear
+        Gdk.cairo_set_source_pixbuf(cr, self.gear_icon, gx + 3, gy + 3)
+        cr.paint_with_alpha(0.35)
+
+        self._draw_text(cr)
+        return False
+
+    def _draw_text(self, cr):
+        lines = self._visible_lines(cr) if self.show_text else []
+        self._n_lines = max(len(lines), 1)
+        if self.box_h < 1 or self.text_alpha < 0.02:
+            return
+        a = self.text_alpha
+        bw = self.text_w
+        x = self.cx - bw / 2
+        y = self.text_anchor - self.box_h if self.text_above else self.text_anchor
+        rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
+        cr.set_source_rgba(0.09, 0.09, 0.11, 0.86 * a)
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.08 * a)
+        cr.set_line_width(1)
+        cr.stroke()
+
+        cr.save()
+        rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
+        cr.clip()
+        n = len(lines)
+        # linhas antigas esmaecem; a atual é branca (parcial um pouco mais suave)
+        alphas = [0.38, 0.62, 1.0][-n:] if n else []
+        ty = y + self.text_pad + (self.box_h - 2 * self.text_pad - self.line_h * n) / 2
+        for line, la in zip(lines, alphas):
+            current = line is lines[-1]
+            weight = Pango.Weight.MEDIUM if (current and self.final) else Pango.Weight.NORMAL
+            lay = self._layout(cr, line, self.font_px, weight)
+            w, h = lay.get_pixel_size()
+            cr.move_to(self.cx - w / 2, ty + (self.line_h - h) / 2)
+            cr.set_source_rgba(1, 1, 1, a * la * (1.0 if (self.final or not current) else 0.85))
+            PangoCairo.show_layout(cr, lay)
+            ty += self.line_h
+        cr.restore()

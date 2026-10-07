@@ -10,13 +10,14 @@ from gi.repository import Gtk, Gdk, GdkPixbuf
 
 from ..config import load_config
 
-# Acento: (início, fim) do gradiente. O primeiro também é a cor sólida da UI.
+# Acento: (cor sólida da UI, início do gradiente, fim do gradiente).
+# O gradiente tem contraste de matiz (ex.: azul → magenta) para o orbe ter profundidade.
 ACCENTS = {
-    "indigo": ("#7C6CFF", "#B36BFF"),
-    "cyan": ("#2EC8FF", "#3A6BFF"),
-    "amber": ("#F59E0B", "#FF5E3A"),
-    "green": ("#30D158", "#00B3A4"),
-    "pink": ("#FF5FA2", "#A45CFF"),
+    "indigo": ("#7C6CFF", "#3D6BFF", "#D45CFF"),
+    "cyan": ("#2EC8FF", "#2FE6FF", "#3A55FF"),
+    "amber": ("#F59E0B", "#FFC83A", "#FF4D3A"),
+    "green": ("#30D158", "#7CF08F", "#00A8C8"),
+    "pink": ("#FF5FA2", "#FF7AB8", "#7C5CFF"),
 }
 ACCENT_LABELS = {"indigo": "Índigo", "cyan": "Ciano", "amber": "Âmbar", "green": "Verde", "pink": "Rosa"}
 
@@ -30,11 +31,24 @@ def hex_to_rgb(color):
     return tuple(int(color[i:i + 2], 16) / 255 for i in (0, 2, 4))
 
 
-def accent_pair(config):
-    """Gradiente do acento; 'custom' usa accent_custom nas duas pontas."""
+def _shift(color, factor):
+    r, g, b = hex_to_rgb(color)
+    mix = (lambda c: c + (1 - c) * factor) if factor > 0 else (lambda c: c * (1 + factor))
+    return "#{:02X}{:02X}{:02X}".format(*(int(mix(c) * 255) for c in (r, g, b)))
+
+
+def ui_accent(config):
     if config.get("accent") == "custom" and config.get("accent_custom"):
-        return config["accent_custom"], config["accent_custom"]
-    return ACCENTS.get(config.get("accent", "indigo"), ACCENTS["indigo"])
+        return config["accent_custom"]
+    return ACCENTS.get(config.get("accent", "indigo"), ACCENTS["indigo"])[0]
+
+
+def accent_pair(config):
+    """Gradiente (início, fim) do acento; cor livre vira clara → escura."""
+    if config.get("accent") == "custom" and config.get("accent_custom"):
+        c = config["accent_custom"]
+        return _shift(c, 0.35), _shift(c, -0.35)
+    return ACCENTS.get(config.get("accent", "indigo"), ACCENTS["indigo"])[1:]
 
 
 CSS_TEMPLATE = """
@@ -190,7 +204,7 @@ _provider = None
 
 
 def build_css(config):
-    return CSS_TEMPLATE.format(accent=accent_pair(config)[0], danger=DANGER)
+    return CSS_TEMPLATE.format(accent=ui_accent(config), danger=DANGER)
 
 
 def apply_theme(screen, config=None):
@@ -423,7 +437,7 @@ def accent_picker(current, on_change, custom_color=None):
         for k, sw in swatches.items():
             sw.set_selected(k == key)
 
-    for key, pair in ACCENTS.items():
+    for key, (_ui, *pair) in ACCENTS.items():
         swatches[key] = Swatch(pair, ACCENT_LABELS[key], lambda k=key: (select(k), on_change(k, None)))
         box.pack_start(swatches[key], False, False, 0)
 
