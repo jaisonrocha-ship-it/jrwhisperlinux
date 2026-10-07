@@ -45,6 +45,15 @@ DEFAULT_CONFIG = {
     "audio_ducking": True,
     "ducking_volume": 0.20,
     "noise_suppression": True,
+    # Aparência (flat: load_config faz merge raso com o config do usuário)
+    "accent": "indigo",
+    "accent_custom": None,
+    "overlay_style": "orb",
+    "overlay_size": "m",
+    "overlay_position": "bottom",
+    "overlay_show_text": True,
+    "overlay_glow": 0.8,
+    "reduce_motion": False,
     "word_overrides": {
         "m2a metais": "M2A Metais",
         "arcelormittal": "ArcelorMittal",

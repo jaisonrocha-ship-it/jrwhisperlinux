@@ -63,6 +63,12 @@ else
     ok "Configuracao ja existe — mantida"
 fi
 
+# Inter variável (OFL): a UI usa pesos 400–700; muitas distros só têm o Regular.
+mkdir -p "$HOME/.local/share/fonts"
+cp "$PWD/assets/fonts/InterVariable.ttf" "$HOME/.local/share/fonts/"
+fc-cache -f "$HOME/.local/share/fonts" >/dev/null 2>&1 || true
+ok "Fonte Inter instalada"
+
 if [ -f "$PWD/config/bd.rnnn" ]; then
     cp "$PWD/config/bd.rnnn" "$HOME/.config/dictate/bd.rnnn"
     ok "Modelo RNNoise instalado"
