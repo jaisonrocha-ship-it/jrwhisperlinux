@@ -86,7 +86,8 @@ def test_queued_sentences_go_in_one_call():
     calls = []
     th = _thread(lambda cfg, ins, text, timeout=None, system=None: calls.append(text) or text.upper())
     _run_mt(th, [("hello", "en"), ("world", "en")])
-    assert calls == ["hello world"] and th.lines == ["HELLO WORLD"] and not th.pending and th.overlay.final
+    assert calls == ["<fala>hello world</fala>"] and th.lines == ["HELLO WORLD"]  # marcações saem da tela
+    assert not th.pending and th.overlay.final
 
 
 def test_429_retries_instead_of_showing_original():

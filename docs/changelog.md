@@ -17,6 +17,7 @@
 1. **Idioma "Detectar automaticamente" não transcrevia nada:** o faster-whisper recusa `"auto"`. Agora detecta só entre português e inglês (`auto_languages`): livre, chutava turco em trechos curtos.
 2. **Comandos de voz duplicavam pontuação:** "Olá vírgula, tudo bem ponto final." saía "Olá,, tudo bem.." e "Nova linha." perdia a quebra de linha.
 3. **Resposta inesperada da IA (200 sem JSON) derrubava o ditado:** agora cola o texto original.
+3b. **A IA respondia em vez de reescrever/traduzir:** "me diga uma piada" no modo Corrigir virava uma piada, "você pode me ajudar amanhã" no modo Mensagem virava "Claro, posso ajudar…" e, nas legendas, "you want anything?" virava "Não, obrigado…". O texto agora vai entre marcações, com a regra de nunca responder e um exemplo; verificado 3× por caso.
 4. **"Copiar" do histórico sumia ao fechar a janela:** usa xclip/wl-copy, que persistem.
 5. **config.json corrompido impedia o app de abrir:** usa os padrões e registra no log.
 6. **Opção de linha de comando com erro de digitação começava a gravar:** agora mostra a ajuda.
