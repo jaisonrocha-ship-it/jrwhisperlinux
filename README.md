@@ -49,7 +49,7 @@ Minimalista por padrão: um atalho, um orbe que reage à sua voz, o texto colado
 * **Atalhos de texto:** diga "minha assinatura" e o bloco inteiro entra no lugar.
 * **Histórico:** local (0600), com retenção configurável e busca estilo Spotlight (`dictate --history`; Enter cola).
 * **Som do computador:** transcreve o que está tocando (vídeo do YouTube, reunião) direto da saída de áudio, sem passar pelo microfone. Escolha "Som do computador" em Ajustes → Microfone ou use `dictate --system` com atalho próprio; não pausa nas pausas do vídeo, termina no 2º toque ou na duração máxima.
-* **Legendas ao vivo:** `dictate --captions` (ou o atalho em Ajustes → Reconhecimento) legenda o som do computador enquanto toca, traduzido para português, inglês ou espanhol. Inglês sai do próprio Whisper (local); os outros idiomas usam o provedor de IA. Cada frase aparece ~1–2 s depois de dita, com a prévia no idioma original enquanto ela não fecha; no fim, a legenda inteira fica copiada.
+* **Legendas ao vivo:** `dictate --captions` (ou o atalho em Ajustes → Reconhecimento) legenda o som do computador enquanto toca, traduzido para português, inglês ou espanhol. Inglês sai do próprio Whisper (local); os outros idiomas usam o provedor de IA. A prévia aparece ~0,5–1 s depois da fala e é traduzida enquanto cresce (~1,5–3 s com a NVIDIA; mais rápido com Ollama local); no fim, a legenda inteira fica copiada.
 * **Push-to-talk:** segure o atalho para falar e solte para enviar (X11).
 * **Mãos livres:** depois de colar, volta a ouvir; para com "parar ditado", silêncio longo ou o atalho (que antes transcreve o trecho em andamento).
 

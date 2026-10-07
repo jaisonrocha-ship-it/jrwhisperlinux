@@ -550,11 +550,17 @@ class SettingsWindow(Gtk.Window):
 
         lb = t.group(box, "Legendas ao vivo",
                      "Legenda o som do computador (vídeo em inglês, chinês, russo…) enquanto toca, traduzida. "
-                     "Inglês é traduzido pelo próprio Whisper, no seu computador; os outros idiomas usam o "
-                     "provedor da aba Inteligência. No fim, a legenda inteira fica copiada.")
+                     "Inglês é traduzido pelo próprio Whisper; os outros idiomas usam o tradutor abaixo. "
+                     "O idioma do vídeo é detectado nos primeiros segundos. No fim, a legenda inteira fica copiada.")
         t.choice_row(lb, "Legendar em", None, [("pt", "Português"), ("en", "Inglês"), ("es", "Espanhol"),
                                                ("", "Idioma original (sem traduzir)")],
                      self.config.get("caption_language", "pt"), lambda v: self.set("caption_language", v))
+        t.choice_row(lb, "Tradutor", "NVIDIA: tradução melhor, ~0,7 s por frase, prévia atualizada a cada 2,5 s "
+                     "(limite do plano grátis). Ollama: ~0,4 s, sem limite e nada sai do computador, mas modelos "
+                     "pequenos traduzem pior.",
+                     [("auto", "Automático (NVIDIA, senão Ollama)"), ("ollama", "Ollama (local)"),
+                      ("nvidia", "NVIDIA NIM (nuvem)")],
+                     self.config.get("caption_translator", "auto"), lambda v: self.set("caption_translator", v))
         self._shortcut_row(lb, "Atalho das legendas", "Toque para começar; de novo para encerrar.",
                            "Dictate: legendas", f"{DICTATE_CMD} --captions")
 

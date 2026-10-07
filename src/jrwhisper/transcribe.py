@@ -125,7 +125,7 @@ def _pick_language(model, wav_path, allowed):
 
 
 def _run(model, wav_path, cfg):
-    """(texto, idioma falado)."""
+    """(texto, idioma falado, confiança do idioma, [(início, fim, texto)] dos segmentos)."""
     kwargs = _transcribe_kwargs(cfg)
     if kwargs["language"] is None and cfg.get("auto_languages"):
         kwargs["language"] = _pick_language(model, wav_path, cfg["auto_languages"])
@@ -135,7 +135,9 @@ def _run(model, wav_path, cfg):
         # Sem VAD, ruído vira frase inventada com confiança baixa (avg_logprob ~-1,4; música ~-0,3).
         floor = cfg.get("log_prob_threshold", -1.0)
         segments = [s for s in segments if s.avg_logprob >= floor]
-    return " ".join(s.text.strip() for s in segments).strip(), info.language
+    segments = list(segments)
+    return (" ".join(s.text.strip() for s in segments).strip(), info.language, info.language_probability,
+            [(s.start, s.end, s.text.strip()) for s in segments])
 
 
 class Transcriber:
@@ -144,6 +146,8 @@ class Transcriber:
         self.model = None
         self._device = None
         self.last_language = None  # idioma detectado na última transcrição
+        self.last_language_prob = 0.0
+        self.last_segments = []      # [(início, fim, texto)]: as legendas cortam o áudio nesses limites
         self.use_daemon = self._check_daemon_alive()
         if not self.use_daemon:
             _debug_log("Daemon não detectado. Carregando modelo localmente (fallback)...")
@@ -285,6 +289,8 @@ class Transcriber:
                 resp = json.loads(b''.join(data).decode('utf-8'))
                 if "text" in resp:
                     self.last_language = resp.get("language")
+                    self.last_language_prob = resp.get("language_probability", 0.0)
+                    self.last_segments = resp.get("segments", [])
                     return resp["text"].strip()
                 else:
                     _debug_log(f"Erro do daemon: {resp.get('error')}")
@@ -300,7 +306,7 @@ class Transcriber:
             self._load_model()
 
         try:
-            text, self.last_language = _run(self.model, wav_path, cfg)
+            text, self.last_language, self.last_language_prob, self.last_segments = _run(self.model, wav_path, cfg)
             return text
         except Exception as e:
             if self._device != "cuda":
@@ -310,7 +316,7 @@ class Transcriber:
                 from faster_whisper import WhisperModel
                 self.model = WhisperModel(self.config["model"], device="cpu", compute_type="int8")
                 self._device = "cpu"
-                text, self.last_language = _run(self.model, wav_path, cfg)
+                text, self.last_language, self.last_language_prob, self.last_segments = _run(self.model, wav_path, cfg)
                 return text
             except Exception:
                 return ""
@@ -426,10 +432,11 @@ def run_daemon(config):
                         _debug_log(f"Daemon: modelo '{want}' falhou ({ex}); mantendo '{loaded}'")
                         model = load(loaded)
                 try:
-                    text, language = _run(model, wav_path, req)
+                    text, language, prob, segs = _run(model, wav_path, req)
                     t1 = time.time()
                     _debug_log(f"Daemon: Sucesso em {t1-t0:.2f}s -> {text[:100]}")
-                    conn.sendall(json.dumps({"text": text, "language": language}).encode('utf-8'))
+                    conn.sendall(json.dumps({"text": text, "language": language, "language_probability": prob,
+                                              "segments": segs}).encode('utf-8'))
                 except Exception as ex:
                     _debug_log(f"Daemon: Erro de transcrição: {ex}")
                     conn.sendall(json.dumps({"error": str(ex)}).encode('utf-8'))

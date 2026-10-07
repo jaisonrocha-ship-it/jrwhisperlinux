@@ -47,9 +47,17 @@ def test_silence_only_never_emits_and_stays_small():
 
 def test_continuous_speech_cut_at_quietest_point():
     c = captions.Chunker(SR)
-    audio = np.concatenate([voice(6.0), voice(0.15, amp=0.001), voice(3.0)])  # leve queda aos 6 s
-    chunks = feed(c, audio)
-    assert len(chunks) == 1 and 5.9 <= len(chunks[0]) / SR <= 6.3, len(chunks[0]) / SR
+    audio = np.concatenate([voice(9.0), voice(0.15, amp=0.001), voice(3.0)])  # leve queda aos 9 s
+    chunks = feed(c, audio)  # rede de segurança (MAX_CHUNK): sem pausa nem segmentos do ASR
+    assert len(chunks) == 1 and 8.9 <= len(chunks[0]) / SR <= 9.3, len(chunks[0]) / SR
+
+
+def test_asr_cut_keeps_epoch_honest():
+    c = captions.Chunker(SR)
+    feed(c, voice(3.0))
+    epoch = c.epoch
+    c.cut(SR)  # frase fechada pelo ASR no 1º segundo
+    assert abs(len(c.buf) / SR - 2.0) < 0.06 and c.epoch != epoch
 
 
 def test_translation_keeps_order_and_falls_back():
@@ -69,7 +77,7 @@ def test_translation_keeps_order_and_falls_back():
             raise captions.ai.AIError("fora do ar")
         return text.upper()
     captions.ai.complete = fake_complete
-    th = captions.CaptionThread(Overlay(), {"caption_language": "pt"})
+    th = captions.CaptionThread(Overlay(), {"caption_language": "pt", "caption_translator": "nvidia"})
     for text, lang in (("hello", "en"), ("já em pt", "pt"), ("falha", "ru")):
         th.pending.append(text)
         th.mt_q.put((text, lang))
@@ -82,7 +90,8 @@ def test_translation_keeps_order_and_falls_back():
 def run_tests():
     failed = False
     for fn in (test_cuts_on_pauses, test_quiet_video_still_cuts, test_silence_only_never_emits_and_stays_small,
-               test_continuous_speech_cut_at_quietest_point, test_translation_keeps_order_and_falls_back):
+               test_continuous_speech_cut_at_quietest_point, test_asr_cut_keeps_epoch_honest,
+               test_translation_keeps_order_and_falls_back):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
