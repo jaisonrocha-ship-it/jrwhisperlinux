@@ -8,6 +8,7 @@ USO:
   dictate --settings / -s      → Abre o painel de configurações premium
   dictate --daemon             → Inicia o daemon persistente do Whisper
   dictate --status             → Mostra informações e status da ferramenta
+  dictate --calibrate          → Mede ruído e voz, diagnostica o mic e salva o limiar
 
 v3.3 — 2026-07-03
   • Código limpo livre de comentários internos e estruturado para publicação no GitHub.
@@ -99,6 +100,8 @@ SPEECH_START_TICKS = 3
 CALIBRATION_WAIT_TIMEOUT = 5.0
 CALIBRATION_MEASURE_SECS = 1.0
 PRE_BUFFER_SECS = 0.3
+# Mic dinâmico com noise gate (Yeti GX) fala a ~0.0005–0.003 RMS; 0.003 cortava a voz.
+THRESHOLD_FLOOR = 0.0005
 DAEMON_TIMEOUT = 60.0
 RNNOISE_MODEL_NAME = "bd.rnnn"
 
@@ -1042,7 +1045,7 @@ def calibrate_threshold(capture, config):
     1. Espera parec produzir dados reais (até 5s)
     2. Descarta primeiros 200ms (transient de inicialização)
     3. Mede 1s de ruído ambiente (20 amostras × 50ms)
-    4. Threshold = mediana × 3.0, com piso 0.003 e teto 0.015
+    4. Threshold = mediana × 3.0, com piso THRESHOLD_FLOOR e teto 0.015
     """
 
     try:
@@ -1055,7 +1058,7 @@ def calibrate_threshold(capture, config):
     t0 = time.time()
     if not capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT):
         _debug_log("ERRO: parec não produziu dados em 5s")
-        return max(config.get("silence_threshold", 0), 0.003)
+        return max(config.get("silence_threshold", 0), THRESHOLD_FLOOR)
 
     wait_time = time.time() - t0
     _debug_log(f"parec iniciou em {wait_time:.3f}s")
@@ -1075,12 +1078,12 @@ def calibrate_threshold(capture, config):
 
     if not rms_samples:
         _debug_log("AVISO: nenhuma amostra RMS > 0 durante calibração")
-        return 0.003
+        return THRESHOLD_FLOOR
 
 
     arr = np.array(rms_samples)
     noise_median = float(np.median(arr))
-    threshold = np.clip(noise_median * 3.0, 0.003, 0.015)
+    threshold = np.clip(noise_median * 3.0, THRESHOLD_FLOOR, 0.015)
 
     _debug_log(
         f"Calibração: samples={len(rms_samples)} "
@@ -1280,6 +1283,7 @@ class DictateThread(threading.Thread):
             all_audio = np.array([], dtype=np.float32)
             speech_confirm_ticks = 0
             silence_counter = 0
+            peak_rms = 0.0
             silence_samples_needed = int(silence_secs / TICK_INTERVAL)
             pre_buffer_captured = False
             last_partial_time = time.time()
@@ -1290,6 +1294,7 @@ class DictateThread(threading.Thread):
 
 
                 rms = capture.get_rms()
+                peak_rms = max(peak_rms, rms)
                 GLib.idle_add(self.overlay.update_level, rms, threshold)
 
                 now = time.time()
@@ -1403,7 +1408,14 @@ class DictateThread(threading.Thread):
                     GLib.idle_add(self.overlay.update_status,
                         "Nenhuma fala detectada", "status-error")
             else:
-                msg = "Nenhuma fala detectada" if not started else "Áudio muito curto"
+                if started:
+                    msg = "Áudio muito curto"
+                elif peak_rms == 0.0:
+                    # Zero digital: mic mutado, desconectado do USB ou device errado.
+                    msg = "Microfone sem sinal"
+                    _debug_log(f"Sem sinal em {mic} (mute físico, USB ou mic_device errado)")
+                else:
+                    msg = "Nenhuma fala detectada"
                 _debug_log(msg)
                 GLib.idle_add(self.overlay.update_status, msg, "status-error")
 
@@ -1779,9 +1791,10 @@ class SettingsWindow(Gtk.Window):
         lbl_thresh = Gtk.Label(label="Limite de Silêncio:")
         lbl_thresh.set_halign(Gtk.Align.START)
 
-        self.adj_thresh = Gtk.Adjustment(value=self.config.get("silence_threshold", 0)*1000, lower=0, upper=50, step_increment=1, page_increment=5)
+        self.adj_thresh = Gtk.Adjustment(value=self.config.get("silence_threshold", 0)*1000, lower=0, upper=15, step_increment=0.1, page_increment=1)
         self.scale_thresh = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adj_thresh)
-        self.scale_thresh.set_digits(0)
+        # 1 casa (0.0001): limiares de mic dinâmico (~0.0004) não podem virar "Auto" ao salvar.
+        self.scale_thresh.set_digits(1)
         self.scale_thresh.set_hexpand(True)
 
         self.lbl_thresh_val = Gtk.Label()
@@ -1856,7 +1869,7 @@ class SettingsWindow(Gtk.Window):
         if val == 0:
             self.lbl_thresh_val.set_markup("<span foreground='#64DCFF' weight='bold'>Auto</span>")
         else:
-            self.lbl_thresh_val.set_text(f"{val/1000:.3f}")
+            self.lbl_thresh_val.set_text(f"{val/1000:.4f}")
 
     def update_dur_label(self):
         val = self.scale_dur.get_value()
@@ -2347,6 +2360,64 @@ def run_overlay_mode(config):
         lock_fd.close()
 
 
+def _level_bar(rms, width=30):
+    """Barra em dBFS: -80 dB vazio, -20 dB cheio."""
+    db = 20 * math.log10(max(rms, 1e-8))
+    filled = int(np.clip((db + 80) / 60, 0, 1) * width)
+    return "#" * filled + "." * (width - filled) + f" {rms:.5f} ({db:.0f} dBFS)"
+
+
+def run_calibration(config):
+    """Mede ruído e voz, diagnostica o mic e grava silence_threshold no config."""
+    mic = config.get("mic_device", "@DEFAULT_SOURCE@")
+    print(f"Microfone: {mic}")
+    capture = AudioCapture(mic, config["sample_rate"])
+    capture.start()
+    try:
+        if not capture.wait_for_data():
+            print("ERRO: nenhum áudio chegou. Mic desconectado ou mic_device errado (veja: pactl list short sources).")
+            return 1
+        time.sleep(0.3)
+
+        def measure(secs):
+            time.sleep(0.5)  # descarta o clique do Enter (mic perto do teclado)
+            vals = []
+            end = time.time() + secs
+            while time.time() < end:
+                time.sleep(TICK_INTERVAL)
+                vals.append(capture.get_rms())
+                print("\r  " + _level_bar(vals[-1]), end="", flush=True)
+            print()
+            return np.array(vals)
+
+        input("\n1/2  Fique em SILÊNCIO e aperte Enter (mede 3s)...")
+        # Mediana: o limiar precisa vencer o ruído contínuo, não cliques isolados.
+        noise = float(np.median(measure(3)))
+        input("\n2/2  Aperte Enter e FALE uma frase longa, no tom normal (mede 5s)...")
+        voice = float(np.percentile(measure(5), 75))
+    finally:
+        capture.stop()
+
+    print(f"\nRuído: {_level_bar(noise)}")
+    print(f"Voz:   {_level_bar(voice)}")
+
+    if voice == 0.0:
+        print("\nZero digital: mic MUTADO (botão do Yeti, LED vermelho) ou noise gate fechado. Nada salvo.")
+        return 1
+    if voice < max(noise * 4, THRESHOLD_FLOOR / 5):
+        print("\nA voz não se destacou do ruído: mic mutado, ganho no mínimo ou longe demais. Nada salvo.")
+        return 1
+
+    # Acima do ruído e bem abaixo da voz: confirma fala sem disparar no ambiente.
+    threshold = round(max(noise * 3, voice / 4), 5)
+    config["silence_threshold"] = threshold
+    save_config(config)
+    print(f"\nLimiar salvo: {threshold:.5f}  (silence_threshold no config; 0 volta ao automático)")
+    if voice < 0.005:
+        print("Sinal de voz baixo: suba o ganho do mic ou fale mais perto (~5 cm) para melhor transcrição.")
+    return 0
+
+
 def show_status():
     config = load_config()
     device, compute = choose_device(config)
@@ -2382,6 +2453,12 @@ def main():
         run_daemon(config)
     elif arg == "--status":
         show_status()
+    elif arg == "--calibrate":
+        try:
+            sys.exit(run_calibration(config))
+        except KeyboardInterrupt:
+            print("\nCalibração cancelada. Nada salvo.")
+            sys.exit(130)
     elif arg == "--config":
         print(json.dumps(config, indent=2))
     elif arg in ("--settings", "-s", "--config-panel"):

@@ -134,13 +134,13 @@ def test_calibration():
         print(f"   RMS: {rms:.6f} {'(zero!)' if rms == 0 else ''}")
 
     nonzero = [r for r in rms_samples if r > 0]
-    threshold = 0.003  # piso do dictate quando não há amostras
+    threshold = 0.0005  # piso do dictate quando não há amostras
     print(f"\n   Total: {len(rms_samples)}, Non-zero: {len(nonzero)}")
 
     if nonzero:
         arr = np.array(nonzero)
         median = float(np.median(arr))
-        threshold = max(min(median * 3.0, 0.05), 0.003)
+        threshold = max(min(median * 3.0, 0.015), 0.0005)
         print(f"   Median: {median:.6f}")
         print(f"   Threshold: {threshold:.6f}")
         print(f"   Range: [{arr.min():.6f}, {arr.max():.6f}]")

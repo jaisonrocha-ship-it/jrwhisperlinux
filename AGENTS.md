@@ -22,7 +22,7 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 
 | Arquivo | Função |
 |---------|--------|
-| `src/dictate` | Script principal (2403 linhas) — código de produção |
+| `src/dictate` | Script principal (2475 linhas) — código de produção |
 | `scripts/install.sh` | One-line installer (curl | bash) |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |

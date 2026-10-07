@@ -129,6 +129,14 @@ No painel de controle da sua distribuição (ex: Configurações do Sistema -> T
 * **Comando:** `~/.local/bin/dictate` (ou o caminho onde o script foi instalado)
 * **Atalho:** `Super+Shift+V` (ou o de sua preferência)
 
+### 3. Calibrar o Microfone (opcional)
+
+```bash
+dictate --calibrate
+```
+
+Mede 3s de silêncio e 5s de fala, mostra o nível em dBFS e salva o limiar. Se o mic estiver mutado ou com ganho baixo, avisa e não salva. Para voltar ao automático, coloque o limite em "Auto" no painel (`dictate -s`).
+
 ---
 
 ## 📝 Arquivo de Configuração (`config.json`)
