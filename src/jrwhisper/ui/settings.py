@@ -561,6 +561,8 @@ class SettingsWindow(Gtk.Window):
                      [("auto", "Automático (NVIDIA, senão Ollama)"), ("ollama", "Ollama (local)"),
                       ("nvidia", "NVIDIA NIM (nuvem)")],
                      self.config.get("caption_translator", "auto"), lambda v: self.set("caption_translator", v))
+        t.slider_row(lb, "Linhas na tela", None, 3, 14, 1, self.config.get("caption_lines", 8),
+                     lambda v: f"{int(v)}", lambda v: self.set("caption_lines", int(v)))
         self._shortcut_row(lb, "Atalho das legendas", "Toque para começar; de novo para encerrar.",
                            "Dictate: legendas", f"{DICTATE_CMD} --captions")
 

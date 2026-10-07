@@ -68,19 +68,21 @@ class WhisperFlowOverlay(Gtk.Window):
         self.visual = make_visual(config)
         self.wants_spectrum = config.get("overlay_style") == "bars"
         self.show_text = bool(config.get("overlay_show_text", True))
+        # legendas: mais linhas e cartão mais largo (ditado: 3 linhas que acompanham o fim)
+        self.max_lines = int(config.get("overlay_lines", self.MAX_LINES))
         # IA ligada (fora do mãos livres): o texto espera a escolha em vez de colar sozinho
         self.choices_enabled = bool(config.get("ai_enabled")) and not config.get("handsfree_enabled")
         position = config.get("overlay_position", "bottom")
         s = self.scale = self.visual.scale
 
         self.vw, self.vh = self.visual.size()
-        self.text_w = 440 * s
+        self.text_w = (640 if self.max_lines > self.MAX_LINES else 440) * s
         self.font_px = 14.5 * s
         self.line_h = self.font_px * 1.45
         self.text_pad = 12 * s
         self.chip_h, self.chip_gap = 26 * s, 6 * s
         has_text = self.show_text or self.choices_enabled
-        text_max_h = (2 * self.text_pad + self.line_h * self.MAX_LINES) if self.show_text else 0
+        text_max_h = (2 * self.text_pad + self.line_h * self.max_lines) if self.show_text else 0
         if self.choices_enabled:
             text_max_h = max(text_max_h, 2 * self.text_pad + self.line_h * self.CHOICE_LINES + self._chips_h(self.CHIP_ROWS))
         status_h = 24 * s
@@ -410,7 +412,7 @@ class WhisperFlowOverlay(Gtk.Window):
                 lead = len(seg) - len(seg.lstrip())
                 lines.append((seg.strip(), len(raw[:ln.start_index].decode(errors="ignore")) + lead))
         if not self.choices:
-            return lines[-self.MAX_LINES:]  # ditando: acompanha o fim
+            return lines[-self.max_lines:]  # ditando/legenda: acompanha o fim
         # revisão: lê-se de cima, rolando com a roda do mouse
         self._scroll = start = min(self._scroll, max(0, len(lines) - self.CHOICE_LINES))
         self._more = (start > 0, start + self.CHOICE_LINES < len(lines))
@@ -509,7 +511,7 @@ class WhisperFlowOverlay(Gtk.Window):
         cr.clip()
         n = len(lines)
         # linhas antigas esmaecem; a atual é branca (parcial um pouco mais suave)
-        alphas = [0.38, 0.62, 1.0][-n:] if n else []
+        alphas = [0.38, 0.62, 1.0][-n:] if n <= 3 else [0.5 + 0.5 * i / (n - 1) for i in range(n)]
         if self.choices:
             alphas = [1.0] * n  # revisão: tudo legível
         chips_h = self._chips_h(len(chip_rows))
@@ -519,7 +521,8 @@ class WhisperFlowOverlay(Gtk.Window):
             weight = Pango.Weight.MEDIUM if (current and self.final and not self.choices) else Pango.Weight.NORMAL
             lay = self._layout(cr, line, self.font_px, weight)
             w, h = lay.get_pixel_size()
-            lx = self.cx - w / 2
+            # legenda (várias linhas de texto corrido) lê melhor alinhada à esquerda
+            lx = x + self.text_pad if self.max_lines > self.MAX_LINES and not self.choices else self.cx - w / 2
             if self.choices:  # cada palavra vira alvo de clique para edição
                 for m in re.finditer(r"\S+", line):
                     p0 = lay.index_to_pos(len(line[:m.start()].encode()))

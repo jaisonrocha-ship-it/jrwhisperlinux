@@ -10,6 +10,7 @@ Whisper (task "translate"), sem IA; os outros idiomas usam o provedor de IA (NVI
 import collections
 import os
 import queue
+import re
 import threading
 import time
 import wave
@@ -36,7 +37,10 @@ DETECT_SECS = 3.0    # o idioma é decidido antes de qualquer legenda, a partir 
                      # 1–3 s o Whisper chuta (russo virava alemão/polonês). Depois fica fixo; vídeo que troca
                      # de língua: reinicie a legenda.
 LANG_PROB = 0.7      # confiança para fixar; sem ela até MAX_CHUNK, fica o melhor palpite
-NIM_LIVE_GAP = 2.5   # NVIDIA: prévia traduzida no máx. a cada 2,5 s (o plano grátis devolve 429 acima de ~40/min)
+NIM_LIVE_GAP = 2.5   # NVIDIA: prévia traduzida no máx. a cada 2,5 s
+NIM_PER_MIN = 35     # orçamento de chamadas por minuto (o plano grátis devolve 429 acima de ~40)
+NIM_RESERVE = 10     # a prévia só usa o orçamento se sobrarem estas para as frases fechadas
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uff00-\uffef]+")
 SYSTEM = ("Você traduz legendas de vídeo em tempo real. Traduza fielmente e com naturalidade, "
           "sem comentários, sem aspas, sem explicações. Nomes próprios ficam como estão.")
 
@@ -159,6 +163,7 @@ class CaptionThread(threading.Thread):
         self._lock = threading.Lock()
         self._warned = False
         self.mt_cfg = config                    # trocado por pick_translator() no início da tradução
+        self._sent = collections.deque()        # horários das chamadas de tradução (orçamento por minuto)
 
     def hotkey(self):
         """2º toque no atalho: encerra (o que já foi captado ainda é legendado)."""
@@ -302,36 +307,56 @@ class CaptionThread(threading.Thread):
         """O trecho em andamento virou frase fechada: a prévia fica na tela (provisória) até a tradução
         final chegar, sem piscar vazio enquanto a frase é retranscrita."""
         with self._lock:
-            self.pending.append(self.live["tr"] or self.live["src"])
+            self.pending.append(self.live["tr"])  # só a tradução (vazia = nada até a final chegar)
             self.live = {"src": "", "lang": None, "tr": "", "tr_src": ""}
             self.gen += 1
 
     def _close(self, text, lang):
         """Frase fechada pelo ASR (limite de segmento): sai da prévia e entra na fila de tradução."""
         with self._lock:
-            self.pending.append(text)
-            self.live = {**self.live, "tr": "", "tr_src": ""}  # a tradução da prévia incluía esta frase
+            # sem tradução própria ainda: mostra a da prévia (que incluía esta frase), não o original
+            self.pending.append(self.live["tr"] if self._needs_mt(lang) else text)
+            self.live = {**self.live, "tr": "", "tr_src": ""}
             self.gen += 1
         self.mt_q.put((text, lang))
         self._refresh()
 
-    def _translate(self, text, prev=""):
+    def _budget(self):
+        """Chamadas restantes no minuto (NVIDIA grátis: ~40/min, acima disso devolve 429)."""
+        if self.mt_cfg.get("ai_provider") == "ollama":
+            return 99
+        now = time.time()
+        while self._sent and now - self._sent[0] > 60:
+            self._sent.popleft()
+        return NIM_PER_MIN - len(self._sent)
+
+    def _translate(self, text, prev="", retries=0):
+        """Tradução, ou None se falhou (a prévia espera a próxima; frase fechada tenta de novo)."""
         context = f"\nFrase anterior, só como contexto (não traduza): {prev}" if prev else ""
-        t0 = time.time()
-        try:
-            out = ai.complete(self.mt_cfg, f"Traduza para {LANG_NAMES.get(self.target, self.target)}.",
-                              text, timeout=6, system=SYSTEM + context)
+        lang_name = LANG_NAMES.get(self.target, self.target)
+        for attempt in range(retries + 1):
+            while self._budget() <= 0:
+                time.sleep(0.2)
+            self._sent.append(time.time())
+            t0 = time.time()
+            try:
+                out = ai.complete(self.mt_cfg, f"Traduza para {lang_name}.", text, timeout=6,
+                                  system=f"{SYSTEM} Responda somente em {lang_name}.{context}")
+            except ai.AIError as e:
+                _debug_log(f"Legendas: tradução falhou ({e})")
+                if "429" in str(e) and attempt < retries:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                return None
             _debug_log(f"Legendas: tradução em {time.time() - t0:.2f}s ({len(text)} car.)")
-            return out
-        except ai.AIError as e:
-            _debug_log(f"Legendas: tradução falhou ({e}); mostrando o original")
-            if not self._warned:
-                self._warned = True
-                self._status("Tradução indisponível · mostrando o original", "status-error")
-            return text
+            if self.target not in ("zh", "ja", "ko"):  # qwen2.5 local vazava "我们需要" no meio do português
+                out = CJK.sub("", out).strip()
+            return out or None
+        return None
 
     def _mt_worker(self):
-        """Frases fechadas primeiro, na ordem; ocioso, traduz a prévia mais recente."""
+        """Frases fechadas primeiro, na ordem (as que acumularam vão juntas numa chamada só);
+        ociosa e com orçamento sobrando, traduz a prévia mais recente."""
         prev = ""
         if self.target and not self.whisper_translates:
             self.mt_cfg = pick_translator(self.config)
@@ -341,28 +366,49 @@ class CaptionThread(threading.Thread):
                 self._translate("ok")
         live_gap = 0.0 if self.mt_cfg.get("ai_provider") == "ollama" else NIM_LIVE_GAP
         last_live = 0.0
-        while True:
+        stop = False
+        while not stop:
             try:
                 item = self.mt_q.get(timeout=0.05)
             except queue.Empty:
                 with self._lock:
                     src, lang, done, gen = self.live["src"], self.live["lang"], self.live["tr_src"], self.gen
-                if src and src != done and self._needs_mt(lang) and time.time() - last_live >= live_gap:
+                if (src and src != done and self._needs_mt(lang) and time.time() - last_live >= live_gap
+                        and self._budget() > NIM_RESERVE):  # a prévia nunca gasta o que as frases precisam
                     last_live = time.time()
                     out = self._translate(src, prev)
                     with self._lock:
-                        if self.gen == gen:  # a prévia não virou frase fechada enquanto traduzia
+                        if out and self.gen == gen:  # a prévia não virou frase fechada enquanto traduzia
                             self.live.update(tr=out, tr_src=src)
                     self._refresh()
                 continue
             if item is None:
                 return
-            text, lang = item
-            out = self._translate(text, prev) if text and self._needs_mt(lang) else text
+            batch = [item]
+            while True:  # frases que acumularam (tradução lenta/429) vão numa chamada só
+                try:
+                    nxt = self.mt_q.get_nowait()
+                except queue.Empty:
+                    break
+                if nxt is None:
+                    stop = True
+                    break
+                batch.append(nxt)
+            text = " ".join(t for t, _l in batch if t)
+            lang = next((l for t, l in batch if t), batch[0][1])
+            out = text
+            if text and self._needs_mt(lang):
+                out = self._translate(text, prev, retries=3)
+                if out is None:  # só depois de insistir: o original, com aviso
+                    out = text
+                    if not self._warned:
+                        self._warned = True
+                        self._status("Tradução indisponível · mostrando o original", "status-error")
             prev = text or prev
             with self._lock:
-                if self.pending:
-                    self.pending.popleft()
+                for _ in batch:
+                    if self.pending:
+                        self.pending.popleft()
                 if out:
                     self.lines.append(out)
             self._refresh()
@@ -370,8 +416,13 @@ class CaptionThread(threading.Thread):
     # ── tela ───────────────────────────────────────────────────────
     def _refresh(self):
         with self._lock:
-            live = self.live["tr"] or self.live["src"]  # sem tradução ainda: o original, até ela chegar
-            parts = self.lines[-6:] + [p for p in self.pending if p] + ([live] if live else [])
+            # Traduzindo, o original nunca vai para a tela (metade em cada língua era ilegível):
+            # o que ainda não foi traduzido vira "…" até a tradução chegar.
+            waiting = bool(self.live["src"]) and not self.live["tr"]
+            live = self.live["tr"] or ("…" if waiting else "")
+            if self.pending:  # o provisório da frase fechada já cobre o começo da prévia: sem duplicar
+                live = "…" if self.live["src"] else ""
+            parts = self.lines[-30:] + [p for p in self.pending if p] + ([live] if live else [])
             final = not (self.pending or live)
         GLib.idle_add(self.overlay.update_text, " ".join(parts), final)
 

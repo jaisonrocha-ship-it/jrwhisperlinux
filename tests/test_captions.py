@@ -60,8 +60,9 @@ def test_asr_cut_keeps_epoch_honest():
     assert abs(len(c.buf) / SR - 2.0) < 0.06 and c.epoch != epoch
 
 
-def test_translation_keeps_order_and_falls_back():
+def _thread(fake):
     captions.GLib.idle_add = lambda f, *a: f(*a)
+    captions.time.sleep = lambda s: None  # espera de 429 sem atrasar o teste
 
     class Overlay:
         def update_text(self, text, final):
@@ -69,29 +70,64 @@ def test_translation_keeps_order_and_falls_back():
 
         def update_status(self, *a):
             pass
-    calls = []
+    captions.ai.complete = fake
+    return captions.CaptionThread(Overlay(), {"caption_language": "pt", "caption_translator": "nvidia"})
 
-    def fake_complete(config, instruction, text, timeout=None, system=None):
-        calls.append(text)
-        if text == "falha":
-            raise captions.ai.AIError("fora do ar")
-        return text.upper()
-    captions.ai.complete = fake_complete
-    th = captions.CaptionThread(Overlay(), {"caption_language": "pt", "caption_translator": "nvidia"})
-    for text, lang in (("hello", "en"), ("já em pt", "pt"), ("falha", "ru")):
+
+def _run_mt(th, items):
+    for text, lang in items:
         th.pending.append(text)
         th.mt_q.put((text, lang))
     th.mt_q.put(None)
     th._mt_worker()
-    assert th.lines == ["HELLO", "já em pt", "falha"]  # pt não vai para a IA; erro mostra o original
-    assert calls == ["hello", "falha"] and th.overlay.final and not th.pending
+
+
+def test_queued_sentences_go_in_one_call():
+    calls = []
+    th = _thread(lambda cfg, ins, text, timeout=None, system=None: calls.append(text) or text.upper())
+    _run_mt(th, [("hello", "en"), ("world", "en")])
+    assert calls == ["hello world"] and th.lines == ["HELLO WORLD"] and not th.pending and th.overlay.final
+
+
+def test_429_retries_instead_of_showing_original():
+    calls = []
+
+    def fake(cfg, ins, text, timeout=None, system=None):
+        calls.append(text)
+        if len(calls) < 3:
+            raise captions.ai.AIError("429 Client Error: Too Many Requests")
+        return "olá"
+    th = _thread(fake)
+    _run_mt(th, [("hello", "en")])
+    assert th.lines == ["olá"] and len(calls) == 3
+
+
+def test_same_language_skips_ai_and_failure_falls_back():
+    calls = []
+
+    def fake(cfg, ins, text, timeout=None, system=None):
+        calls.append(text)
+        raise captions.ai.AIError("fora do ar")
+    th = _thread(fake)
+    _run_mt(th, [("já em pt", "pt")])
+    assert th.lines == ["já em pt"] and calls == []
+    th = _thread(fake)
+    _run_mt(th, [("hello", "en")])
+    assert th.lines == ["hello"] and len(calls) == 1  # sem 429: não insiste, mostra o original
+
+
+def test_cjk_leak_is_stripped():
+    th = _thread(lambda cfg, ins, text, timeout=None, system=None: "O navio chega,我们需要")
+    _run_mt(th, [("The ship arrives, we need", "en")])
+    assert th.lines == ["O navio chega,"]
 
 
 def run_tests():
     failed = False
     for fn in (test_cuts_on_pauses, test_quiet_video_still_cuts, test_silence_only_never_emits_and_stays_small,
                test_continuous_speech_cut_at_quietest_point, test_asr_cut_keeps_epoch_honest,
-               test_translation_keeps_order_and_falls_back):
+               test_queued_sentences_go_in_one_call, test_429_retries_instead_of_showing_original,
+               test_same_language_skips_ai_and_failure_falls_back, test_cjk_leak_is_stripped):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
