@@ -134,6 +134,7 @@ def test_calibration():
         print(f"   RMS: {rms:.6f} {'(zero!)' if rms == 0 else ''}")
 
     nonzero = [r for r in rms_samples if r > 0]
+    threshold = 0.003  # piso do dictate quando não há amostras
     print(f"\n   Total: {len(rms_samples)}, Non-zero: {len(nonzero)}")
 
     if nonzero:

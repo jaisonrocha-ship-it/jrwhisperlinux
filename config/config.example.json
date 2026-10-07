@@ -1,0 +1,30 @@
+{
+  "model": "medium",
+  "language": "pt",
+  "sample_rate": 16000,
+  "mic_device": "@DEFAULT_SOURCE@",
+  "silence_threshold": 0,
+  "silence_duration": 1.7,
+  "listen_timeout": 15,
+  "max_duration": 60,
+  "gpu_min_vram_mb": 2500,
+  "initial_prompt": "Termos portuários e de comércio exterior: Incoterms, FOB, CIF, CFR, DAP, chartering, breakbulk, M2A Metais, ArcelorMittal, TESC, reefer, contêiner refrigerado, Inova MM, despachante aduaneiro, estufagem, desova, navio, porto, terminal, armador, frete, conhecimento de embarque, BL, booking",
+  "no_speech_threshold": 0.6,
+  "log_prob_threshold": -1.0,
+  "compression_ratio_threshold": 2.4,
+  "enable_formatting": true,
+  "remove_fillers": true,
+  "voice_commands": true,
+  "audio_ducking": true,
+  "ducking_volume": 0.2,
+  "noise_suppression": true,
+  "word_overrides": {
+    "m2a metais": "M2A Metais",
+    "arcelormittal": "ArcelorMittal",
+    "tesc": "TESC",
+    "brutaldev": "brutaldev",
+    "bl": "B/L",
+    "booking": "Booking",
+    "incoterms": "Incoterms"
+  }
+}

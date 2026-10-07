@@ -22,7 +22,7 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 
 | Arquivo | Função |
 |---------|--------|
-| `src/dictate` | Script principal (2357 linhas) — código de produção |
+| `src/dictate` | Script principal (2403 linhas) — código de produção |
 | `scripts/install.sh` | One-line installer (curl | bash) |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
@@ -49,7 +49,7 @@ bash scripts/install.sh
 2. **Nunca suavizar RMS** — suavização adiciona latência. Use RMS instantâneo com ticks de confirmação de fala.
 3. **GPU via preload** — CUDA é carregado com `ctypes.cdll.LoadLibrary` do `/opt/resolve/libs/`. Não depende de `libcublas.so.12` no sistema.
 4. **xclip + xdotool** — injeção usa clipboard (`xclip -selection clipboard` + `ctrl+v`) com fallback para `xdotool type --window`.
-5. **Daemon via socket Unix** — `/tmp/dictate_daemon.sock`. Mantém modelo carregado para latência zero.
+5. **Daemon via socket Unix** — `$XDG_RUNTIME_DIR/dictate_daemon.sock` (logs, WAVs e PID também ficam lá, nunca em /tmp). Mantém modelo carregado para latência zero.
 6. **Silence detection com histerese** — confirmação de fala 150ms + gap tolerance 2.5s.
 7. **GTK3 threads** — use `GLib.idle_add` para atualizar UI de threads background.
 8. **`os.execv` no bootstrap** — reexecuta o script dentro do venv. Cuidado com `sys.argv`.
@@ -60,7 +60,7 @@ bash scripts/install.sh
 - **Yeti GX mute físico**: microfone captura near-zero quando mutado. Verificar antes de debugar "sem áudio".
 - **parec latency (PipeWire)**: use `--latency-msec=30` para evitar buffer de 2 segundos.
 - **Config.json no .gitignore**: alterações locais não são commitadas.
-- **RNNoise models**: em `config/rnnoise-models/`. Domínio público, trackeados no git (~2MB).
+- **RNNoise**: `config/bd.rnnn` (~300KB, domínio público) é o único modelo usado. Instalado em `~/.config/dictate/`. O teste `test_capture_prebuffer.py` rejeita arquivo < 100KB (já houve um "404: Not Found" salvo no lugar).
 - **Wayland overlay**: overlay GTK3 funciona via XWayland. Em Wayland puro, use `wtype` em vez de `xdotool`.
 
 ## Infra de Publicação

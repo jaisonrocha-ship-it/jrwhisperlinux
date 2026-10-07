@@ -33,7 +33,7 @@ JRWhisperLinux captura áudio do microfone, transcreve com um modelo de IA rodan
 ## 🚀 Principais Recursos
 
 ### 1. Modo Daemon Persistente (Latência 0s)
-O modelo Whisper permanece pré-carregado na GPU em background através de um servidor de socket Unix (`/tmp/dictate_daemon.sock`). Ao ativar o atalho, a captura de voz inicia em **menos de 70ms**, eliminando o delay comum de inicialização de modelos de IA.
+O modelo Whisper permanece pré-carregado na GPU em background através de um servidor de socket Unix (`$XDG_RUNTIME_DIR/dictate_daemon.sock`). Ao ativar o atalho, a captura de voz inicia em **menos de 70ms**, eliminando o delay comum de inicialização de modelos de IA.
 
 ### 2. Interface Deslizante de 3 Linhas (Altura Rígida)
 Para evitar que blocos de texto longos deformem ou redimensionem o modal durante a fala, a interface exibe exatamente as 3 últimas linhas ativas do ditado:
@@ -161,7 +161,7 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 
 ### O atalho não abre o overlay
 * Certifique-se de que dependências como `python3-gi` estão instaladas no sistema.
-* Verifique se o daemon está travado ou se o arquivo de lock `/tmp/dictate.pid` ficou órfão.
+* Verifique se o daemon está travado ou se o arquivo de lock `$XDG_RUNTIME_DIR/dictate.pid` ficou órfão.
 
 ### Erro de VRAM / Carregamento CUDA
 * Se você receber erros relativos a `libcublas.so.12` ausente, o script fará fallback automático para CPU. Para usar a GPU, certifique-se de instalar os pacotes CUDA apropriados ou configure caminhos de bibliotecas compatíveis no driver.

@@ -37,12 +37,15 @@ from gi.repository import Gtk, Gdk, GLib, Pango, GdkPixbuf
 
 CONFIG_DIR = os.path.expanduser("~/.config/dictate")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-PID_FILE = "/tmp/dictate.pid"
-DAEMON_SOCKET = "/tmp/dictate_daemon.sock"
-DAEMON_PID_FILE = "/tmp/dictate_daemon.pid"
-DEBUG_LOG = "/tmp/dictate_debug.log"
-ERROR_LOG = "/tmp/dictate_error.log"
-LAST_WAV = "/tmp/dictate_last.wav"
+# $XDG_RUNTIME_DIR é 0700 por usuário: áudio, transcrições e socket ficam privados.
+RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+PID_FILE = os.path.join(RUNTIME_DIR, "dictate.pid")
+DAEMON_SOCKET = os.path.join(RUNTIME_DIR, "dictate_daemon.sock")
+DAEMON_PID_FILE = os.path.join(RUNTIME_DIR, "dictate_daemon.pid")
+DEBUG_LOG = os.path.join(RUNTIME_DIR, "dictate_debug.log")
+ERROR_LOG = os.path.join(RUNTIME_DIR, "dictate_error.log")
+LAST_WAV = os.path.join(RUNTIME_DIR, "dictate_last.wav")
+PARTIAL_WAV = os.path.join(RUNTIME_DIR, "dictate_partial.wav")
 
 
 CUBLAS_SEARCH_PATHS = [
@@ -96,6 +99,8 @@ SPEECH_START_TICKS = 3
 CALIBRATION_WAIT_TIMEOUT = 5.0
 CALIBRATION_MEASURE_SECS = 1.0
 PRE_BUFFER_SECS = 0.3
+DAEMON_TIMEOUT = 60.0
+RNNOISE_MODEL_NAME = "bd.rnnn"
 
 
 
@@ -163,6 +168,31 @@ def load_config():
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
+
+
+def _pcm16le_to_float32(data: bytes):
+    if not data:
+        return np.array([], dtype=np.float32)
+    if len(data) % 2 != 0:
+        data = data[:-1]
+    if not data:
+        return np.array([], dtype=np.float32)
+    return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def resolve_rnnoise_model_path():
+    """Localiza bd.rnnn: cópia do instalador em ~/.config/dictate, senão o repo."""
+    # realpath: ~/.local/bin/dictate costuma ser symlink para src/dictate.
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    candidates = [
+        os.path.join(CONFIG_DIR, RNNOISE_MODEL_NAME),
+        os.path.join(script_dir, "..", "config", RNNOISE_MODEL_NAME),
+    ]
+    for path in candidates:
+        resolved = os.path.normpath(path)
+        if os.path.isfile(resolved):
+            return resolved
+    return None
 
 
 def _debug_log(msg):
@@ -338,26 +368,25 @@ class AudioCapture:
         with self._lock:
             data = bytes(self.buffer)
             self.buffer.clear()
-        if not data:
-            return np.array([], dtype=np.float32)
-        if len(data) % 2 != 0:
-            data = data[:-1]
-        if not data:
-            return np.array([], dtype=np.float32)
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        return samples
+        return _pcm16le_to_float32(data)
 
     def get_pre_buffer_float32(self):
         """Retorna o conteúdo do pré-buffer como float32 (para incluir no início da gravação)."""
         with self._lock:
             data = b''.join(self._pre_buffer)
-        if not data:
-            return np.array([], dtype=np.float32)
-        if len(data) % 2 != 0:
-            data = data[:-1]
-        if not data:
-            return np.array([], dtype=np.float32)
-        return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        return _pcm16le_to_float32(data)
+
+    def discard_live_buffer(self):
+        """Descarta o buffer linear; o anel de 300ms permanece intacto."""
+        with self._lock:
+            self.buffer.clear()
+
+    def take_pre_buffer_clear_live(self):
+        """Copia o pré-buffer e zera o buffer linear para evitar overlap no ataque."""
+        with self._lock:
+            data = b''.join(self._pre_buffer)
+            self.buffer.clear()
+        return _pcm16le_to_float32(data)
 
     def get_rms(self):
         return self.current_rms
@@ -862,11 +891,11 @@ class Transcriber:
 
     def _denoise_file(self, wav_path):
         """Aplica o filtro de isolamento de voz RNNoise do FFmpeg."""
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        model_path = os.path.join(script_dir, "../config/rnnoise-models/beguiling-drafter-2018-08-30/bd.rnnn")
-        if not os.path.exists(model_path):
+        model_path = resolve_rnnoise_model_path()
+        if not model_path:
+            _debug_log("RNNoise: modelo bd.rnnn não encontrado, pulando isolamento de voz")
             return wav_path
-                
+
         denoised_path = wav_path + ".denoised.wav"
         try:
             cmd = [
@@ -874,21 +903,28 @@ class Transcriber:
                 "-af", f"arnndn=m={model_path},aresample=16000",
                 denoised_path
             ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-            if os.path.exists(denoised_path) and os.path.getsize(denoised_path) > 1000:
+            result = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
+            )
+            if (
+                result.returncode == 0
+                and os.path.exists(denoised_path)
+                and os.path.getsize(denoised_path) > 1000
+            ):
                 _debug_log(f"Isolamento de voz aplicado com sucesso: {denoised_path}")
                 return denoised_path
+            _debug_log(f"RNNoise: ffmpeg retornou {result.returncode}, usando WAV original")
         except Exception as e:
             _debug_log(f"Falha ao aplicar isolamento de voz: {e}")
         return wav_path
 
-    def transcribe_file(self, wav_path):
+    def transcribe_file(self, wav_path, denoise=True):
         """Transcreve o arquivo WAV. Tenta via Daemon, fallback para local."""
         if not os.path.exists(wav_path):
             return ""
 
         original_path = wav_path
-        if self.config.get("noise_suppression", True):
+        if denoise and self.config.get("noise_suppression", True):
             wav_path = self._denoise_file(wav_path)
             
         try:
@@ -908,7 +944,7 @@ class Transcriber:
             try:
 
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(12.0)
+                s.settimeout(DAEMON_TIMEOUT)
                 s.connect(DAEMON_SOCKET)
                 
                 req = {
@@ -938,6 +974,9 @@ class Transcriber:
                     return resp["text"].strip()
                 else:
                     _debug_log(f"Erro do daemon: {resp.get('error')}")
+            except socket.timeout:
+                _debug_log(f"Daemon não respondeu em {DAEMON_TIMEOUT:.0f}s")
+                return ""
             except Exception as e:
                 _debug_log(f"Falha de comunicação com o daemon ({e}), tentando local...")
                 self.use_daemon = False
@@ -1003,7 +1042,7 @@ def calibrate_threshold(capture, config):
     1. Espera parec produzir dados reais (até 5s)
     2. Descarta primeiros 200ms (transient de inicialização)
     3. Mede 1s de ruído ambiente (20 amostras × 50ms)
-    4. Threshold = mediana × 3.0, com piso 0.003 e teto 0.05
+    4. Threshold = mediana × 3.0, com piso 0.003 e teto 0.015
     """
 
     try:
@@ -1102,18 +1141,18 @@ class DictateThread(threading.Thread):
         self.cancelled = False
         self.partial_transcribing = False
         self.recording_active = True
-        self.transcriber = Transcriber(self.config)
+        self.transcriber = None
+        self.original_volume = None
 
     def _run_partial_transcription(self, audio_snapshot, sr):
         try:
-            partial_wav = "/tmp/dictate_partial.wav"
-            with wave.open(partial_wav, "wb") as wf:
+            with wave.open(PARTIAL_WAV, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
                 wf.setframerate(sr)
                 wf.writeframes((audio_snapshot * 32767).astype(np.int16).tobytes())
             
-            text = self.transcriber.transcribe_file(partial_wav)
+            text = self.transcriber.transcribe_file(PARTIAL_WAV, denoise=False)
             if text and self.recording_active:
                 if self.config.get("enable_formatting", True):
                     text = format_transcript(text, self.config)
@@ -1146,7 +1185,7 @@ class DictateThread(threading.Thread):
                 
 
                 subprocess.run([
-                    "wtype", "-M", "ctrl", "v"
+                    "wtype", "-M", "ctrl", "-k", "v"
                 ], timeout=3)
             except (FileNotFoundError, subprocess.TimeoutExpired):
 
@@ -1195,7 +1234,6 @@ class DictateThread(threading.Thread):
                     _debug_log(f"Falha ao colar no X11: {e}")
 
     def run(self):
-        original_volume = None
         try:
             mic = self.config.get("mic_device", "@DEFAULT_SOURCE@")
             sr = self.config["sample_rate"]
@@ -1205,10 +1243,10 @@ class DictateThread(threading.Thread):
 
 
             if self.config.get("audio_ducking", True):
-                original_volume, _ = get_current_volume()
-                if original_volume is not None:
+                self.original_volume, _ = get_current_volume()
+                if self.original_volume is not None:
                     duck_vol = self.config.get("ducking_volume", 0.20)
-                    _debug_log(f"Audio Ducking: salvando volume ({original_volume:.2f}) e reduzindo para {duck_vol:.2f}")
+                    _debug_log(f"Audio Ducking: salvando volume ({self.original_volume:.2f}) e reduzindo para {duck_vol:.2f}")
                     set_volume(duck_vol)
 
 
@@ -1218,6 +1256,9 @@ class DictateThread(threading.Thread):
 
             capture = AudioCapture(mic, sr)
             capture.start()
+
+            # Sem daemon, carrega o modelo aqui (não no __init__, que roda na thread GTK).
+            self.transcriber = Transcriber(self.config)
 
 
             GLib.idle_add(self.overlay.update_status, "Calibrando...", "status-calibrating")
@@ -1263,7 +1304,7 @@ class DictateThread(threading.Thread):
 
 
                         if not pre_buffer_captured:
-                            pre_audio = capture.get_pre_buffer_float32()
+                            pre_audio = capture.take_pre_buffer_clear_live()
                             if len(pre_audio) > 0:
                                 all_audio = np.concatenate([all_audio, pre_audio])
                             pre_buffer_captured = True
@@ -1293,11 +1334,8 @@ class DictateThread(threading.Thread):
                     chunk = capture.get_audio_float32()
                     if len(chunk) > 0:
                         all_audio = np.concatenate([all_audio, chunk])
-                elif speech_confirm_ticks > 0:
-
-                    chunk = capture.get_audio_float32()
-                    if len(chunk) > 0:
-                        all_audio = np.concatenate([all_audio, chunk])
+                else:
+                    capture.discard_live_buffer()
 
 
                 if len(all_audio) > sr * self.config["max_duration"]:
@@ -1384,10 +1422,13 @@ class DictateThread(threading.Thread):
             time.sleep(2)
             GLib.idle_add(self._cleanup_gtk)
         finally:
+            self.restore_volume()
 
-            if original_volume is not None:
-                _debug_log(f"Audio Ducking: restaurando volume original ({original_volume:.2f})")
-                set_volume(original_volume)
+    def restore_volume(self):
+        vol, self.original_volume = self.original_volume, None
+        if vol is not None:
+            _debug_log(f"Audio Ducking: restaurando volume original ({vol:.2f})")
+            set_volume(vol)
 
 
 class SettingsWindow(Gtk.Window):
@@ -2198,6 +2239,7 @@ def run_daemon(config):
     while True:
         try:
             conn, _ = server.accept()
+            conn.settimeout(5.0)
             req_data = conn.recv(16384)
             if not req_data:
                 conn.close()
@@ -2293,6 +2335,8 @@ def run_overlay_mode(config):
         thread.start()
 
         Gtk.main()
+        thread.cancelled = True
+        thread.restore_volume()
 
     finally:
         try:
@@ -2309,7 +2353,7 @@ def show_status():
     free_vram = get_free_vram_mb()
     cublas = _find_cublas_path()
     daemon_running = is_daemon_running()
-    print("Dictate v3.2 — WhisperFlow for Linux")
+    print("Dictate v3.3 — WhisperFlow for Linux")
     print(f"  Modelo:        {config['model']}")
     print(f"  Engine:        {device} ({compute})")
     print(f"  VRAM livre:    {free_vram} MB")
@@ -2317,7 +2361,7 @@ def show_status():
     print(f"  Microfone:     {config.get('mic_device', '@DEFAULT_SOURCE@')}")
     print(f"  Idioma:        {config['language']}")
     print(f"  Threshold:     {config.get('silence_threshold') or 'auto'}")
-    print(f"  Silence dur:   {config.get('silence_duration', 2.5)}s")
+    print(f"  Silence dur:   {config.get('silence_duration', 1.7)}s")
     print(f"  Formatação:    {'Ativa' if config.get('enable_formatting', True) else 'Inativa'}")
     print(f"  Ducking Áudio: {'Ativo (Vol: ' + str(int(config.get('ducking_volume', 0.20)*100)) + '%)' if config.get('audio_ducking', True) else 'Inativo'}")
     print(f"  Overlay:       GTK3")
