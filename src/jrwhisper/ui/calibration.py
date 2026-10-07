@@ -6,7 +6,8 @@ from gi.repository import Gtk, GLib
 
 from ..audio import AudioCapture, calibration_state, default_source_name, evaluate_levels, friendly_mic_name, is_yeti, list_source_names, remove_mic_calibration, resolve_mic, rms_db, save_mic_calibration, yeti_hw_status
 from ..config import CALIBRATION_VERDICTS, TICK_INTERVAL
-from .theme import apply_settings_css
+from . import theme as t
+from .visuals import BarsVisual, rounded_rect, spectrum_bands
 
 
 def _hint_markup(text):
@@ -34,7 +35,8 @@ class CalibrationWindow(Gtk.Window):
         self.set_default_size(540, -1)
         self.set_resizable(False)
         self.set_position(Gtk.WindowPosition.CENTER)
-        apply_settings_css(self.get_screen())
+        t.apply_theme(self.get_screen(), config)
+        self.bars = BarsVisual(config)
 
         self.config = config
         self.on_saved = on_saved
@@ -56,19 +58,13 @@ class CalibrationWindow(Gtk.Window):
         root.set_margin_end(22)
         self.add(root)
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<span size='large' weight='bold' foreground='#FFFFFF'>Calibrar microfone</span>")
-        root.pack_start(title, False, False, 0)
-        subtitle = Gtk.Label(xalign=0)
-        subtitle.set_line_wrap(True)
-        subtitle.set_max_width_chars(62)
-        subtitle.set_markup("<span size='small' foreground='#FFFFFF80'>Mede o ruído do ambiente e a sua voz. "
-                            "O ditado passa a saber quando você começou e parou de falar.</span>")
-        root.pack_start(subtitle, False, False, 0)
+        head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        head.pack_start(t.label("Calibrar microfone", "page-title"), False, False, 0)
+        head.pack_start(t.label("Mede o ruído do ambiente e a sua voz. O ditado passa a saber quando você "
+                                "começou e parou de falar.", "page-subtitle", wrap=True), False, False, 0)
+        root.pack_start(head, False, False, 0)
 
-        mic_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        mic_row.pack_start(Gtk.Label(label="Microfone:"), False, False, 0)
-        self.combo = Gtk.ComboBoxText()
+        self.combo = t.PopupChoice()
         names = list_source_names()
         default = default_source_name()
         initial = mic or resolve_mic(config)[0]
@@ -76,16 +72,13 @@ class CalibrationWindow(Gtk.Window):
             names.append(initial)
         for n in names:
             self.combo.append(n, friendly_mic_name(n) + ("  ·  padrão do sistema" if n == default else ""))
-        mic_row.pack_start(self.combo, True, True, 0)
-        root.pack_start(mic_row, False, False, 0)
-
-        self.lbl_mic_state = Gtk.Label(xalign=0)
-        self.lbl_mic_state.set_line_wrap(True)
-        self.lbl_mic_state.set_max_width_chars(70)
-        root.pack_start(self.lbl_mic_state, False, False, 0)
+        lb = t.group(root)
+        mic_row = t.row(lb, "Microfone", " ", self.combo)
+        self.lbl_mic_state = mic_row.subtitle
+        self.lbl_mic_state.set_max_width_chars(48)
 
         self.meter = Gtk.DrawingArea()
-        self.meter.set_size_request(-1, 76)
+        self.meter.set_size_request(-1, 150)
         self.meter.connect("draw", self.on_draw_meter)
         root.pack_start(self.meter, False, False, 4)
 
@@ -122,6 +115,7 @@ class CalibrationWindow(Gtk.Window):
         self.connect("destroy", self.on_destroy)
         self.combo.connect("changed", self.on_mic_changed)
         self.combo.set_active_id(initial)
+        self.on_mic_changed(self.combo)
         self._tick_id = GLib.timeout_add(int(TICK_INTERVAL * 1000), self._tick)
 
     # ── mic ────────────────────────────────────────────────────────
@@ -190,21 +184,25 @@ class CalibrationWindow(Gtk.Window):
     def _tick(self):
         self.level = self.capture.get_rms() if self.capture else 0.0
         self.peak = max(self.level, self.peak * 0.96)
+        if self.capture:
+            self.bars.set_bands(spectrum_bands(self.capture.recent_samples(), self.config.get("sample_rate", 16000)))
+        self.bars.set_state("listening")
+        self.bars.advance(TICK_INTERVAL)
         if self.phase in self.PHASES:
-            t = time.time() - self.phase_start
+            elapsed = time.time() - self.phase_start
             total = self.SETTLE_SECS + self.PHASES[self.phase]
-            if t >= self.SETTLE_SECS:
+            if elapsed >= self.SETTLE_SECS:
                 self.samples[self.phase].append(self.level)
-            left = max(0, math.ceil(total - t))
+            left = max(0, math.ceil(total - elapsed))
             self.lbl_step.set_markup(
                 f"<span size='x-large' weight='bold' foreground='#FFFFFF'>{self.phase_title}</span>"
-                f"   <span size='x-large' foreground='#64DCFF'>{left}</span>")
-            self.progress.set_fraction(min(t / total, 1.0))
+                f"   <span size='x-large' foreground='{t.ui_accent(self.config)}'>{left}</span>")
+            self.progress.set_fraction(min(elapsed / total, 1.0))
             if self.samples["silence"]:
                 self.marks["noise"] = float(np.median(self.samples["silence"]))
             if self.samples["voice"]:
                 self.marks["voice"] = float(np.percentile(self.samples["voice"], 75))
-            if t >= total:
+            if elapsed >= total:
                 if self.phase == "silence":
                     self._enter("voice")
                 else:
@@ -252,61 +250,50 @@ class CalibrationWindow(Gtk.Window):
         return x0 + w * float(np.clip((rms_db(rms) - self.DB_MIN) / -self.DB_MIN, 0, 1))
 
     def on_draw_meter(self, widget, cr):
+        """Barras de espectro (com reflexo) + régua em dBFS com ruído, limiar e voz."""
         width = widget.get_allocated_width()
-        x0, w = 4, width - 8
-        bar_y, bar_h = 22, 20
+        bars = self.bars
+        bars.scale = (width - 8) / bars.W
+        bw, bh = bars.size()
+        bars.draw(cr, width / 2, bh / 2 + 2)
 
-        def rounded(x, y, ww, hh, r):
-            if ww <= 0:
-                return
-            r = min(r, ww / 2, hh / 2)
-            cr.new_sub_path()
-            cr.arc(x + ww - r, y + r, r, -math.pi / 2, 0)
-            cr.arc(x + ww - r, y + hh - r, r, 0, math.pi / 2)
-            cr.arc(x + r, y + hh - r, r, math.pi / 2, math.pi)
-            cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
-            cr.close_path()
-
-        cr.set_source_rgba(1, 1, 1, 0.06)
-        rounded(x0, bar_y, w, bar_h, 6)
+        x0, w = 14, width - 28
+        bar_y, bar_h = bh + 30, 6
+        rounded_rect(cr, x0, bar_y, w, bar_h, 3)
+        cr.set_source_rgba(1, 1, 1, 0.08)
         cr.fill()
-
-        # Gradiente fixo na escala: âmbar/vermelho só perto do clipping.
-        grad = cairo.LinearGradient(x0, 0, x0 + w, 0)
-        grad.add_color_stop_rgb(0.0, 0.0, 0.48, 1.0)
-        grad.add_color_stop_rgb(0.75, 0.39, 0.86, 1.0)
-        grad.add_color_stop_rgb(0.92, 1.0, 0.78, 0.24)
-        grad.add_color_stop_rgb(1.0, 1.0, 0.33, 0.33)
-        cr.set_source(grad)
-        rounded(x0, bar_y, self._x(self.level, x0, w) - x0, bar_h, 6)
+        g = cairo.LinearGradient(x0, 0, x0 + w, 0)
+        g.add_color_stop_rgb(0.0, 0.19, 0.82, 0.35)
+        g.add_color_stop_rgb(0.8, 1.0, 0.78, 0.24)
+        g.add_color_stop_rgb(1.0, 1.0, 0.33, 0.33)
+        rounded_rect(cr, x0, bar_y, max(self._x(self.level, x0, w) - x0, 0), bar_h, 3)
+        cr.set_source(g)
         cr.fill()
-
         px = self._x(self.peak, x0, w)
-        cr.set_source_rgba(1, 1, 1, 0.75)
-        cr.rectangle(px - 1, bar_y, 2, bar_h)
+        cr.set_source_rgba(1, 1, 1, 0.8)
+        cr.rectangle(px - 1, bar_y - 1, 2, bar_h + 2)
         cr.fill()
 
         cr.select_font_face("Inter", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
         cr.set_font_size(10)
         for key, label, rgb in (("noise", "ruído", (0.62, 0.62, 0.68)),
                                 ("threshold", "limiar", (1.0, 0.78, 0.24)),
-                                ("voice", "voz", (0.39, 1.0, 0.63))):
+                                ("voice", "voz", (0.19, 0.82, 0.35))):
             v = self.marks.get(key)
             if v is None:
                 continue
             mx = self._x(v, x0, w)
             cr.set_source_rgb(*rgb)
-            cr.rectangle(mx - 1, bar_y - 3, 2, bar_h + 6)
+            cr.rectangle(mx - 1, bar_y - 5, 2, bar_h + 10)
             cr.fill()
             ext = cr.text_extents(label)
-            cr.move_to(min(max(mx - ext.width / 2, x0), x0 + w - ext.width), bar_y - 7)
+            cr.move_to(min(max(mx - ext.width / 2, x0), x0 + w - ext.width), bar_y - 9)
             cr.show_text(label)
-
-        cr.set_source_rgba(1, 1, 1, 0.4)
+        cr.set_source_rgba(1, 1, 1, 0.38)
         for db in (-80, -60, -40, -20, 0):
             text = f"{db} dB"
             ext = cr.text_extents(text)
             tx = x0 + w * (db - self.DB_MIN) / -self.DB_MIN
-            cr.move_to(min(max(tx - ext.width / 2, x0), x0 + w - ext.width), bar_y + bar_h + 16)
+            cr.move_to(min(max(tx - ext.width / 2, x0), x0 + w - ext.width), bar_y + bar_h + 15)
             cr.show_text(text)
         return False
