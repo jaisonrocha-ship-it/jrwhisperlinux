@@ -30,7 +30,7 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('Pango', '1.0')
 
-import signal, subprocess, json, time, tempfile, threading, fcntl, wave, socket, cairo, math, re
+import signal, subprocess, json, time, tempfile, threading, fcntl, wave, socket, cairo, math, re, shutil
 from collections import deque
 import numpy as np
 from gi.repository import Gtk, Gdk, GLib, Pango, GdkPixbuf
@@ -1410,12 +1410,12 @@ class DictateThread(threading.Thread):
             else:
                 if started:
                     msg = "Áudio muito curto"
-                elif peak_rms == 0.0:
-                    # Zero digital: mic mutado, desconectado do USB ou device errado.
-                    msg = "Microfone sem sinal"
-                    _debug_log(f"Sem sinal em {mic} (mute físico, USB ou mic_device errado)")
                 else:
-                    msg = "Nenhuma fala detectada"
+                    msg = "Microfone sem sinal" if peak_rms == 0.0 else "Nenhuma fala detectada"
+                    if peak_rms < threshold:
+                        # Nada chegou ao limiar: mute/ganho do Yeti explicam mais que "sem fala".
+                        msg = yeti_hw_problem() or msg
+                        _debug_log(f"Pico {peak_rms:.5f} < limiar {threshold:.5f} em {mic}")
                 _debug_log(msg)
                 GLib.idle_add(self.overlay.update_status, msg, "status-error")
 
@@ -2360,6 +2360,32 @@ def run_overlay_mode(config):
         lock_fd.close()
 
 
+def yeti_hw_status():
+    """Ganho/mute internos do Yeti GX via yeti-ctl (HID++), se instalado. O ALSA não enxerga."""
+    # ponytail: caminho do setup local; sem yeti-ctl retorna None e nada muda.
+    path = shutil.which("yeti-ctl") or os.path.expanduser("~/dev/yeti-ctl/yeti-ctl.py")
+    if not os.path.isfile(path):
+        return None
+    try:
+        out = subprocess.run(["python3", path, "json"], capture_output=True, text=True, timeout=3).stdout
+        status = json.loads(out)
+    except Exception:
+        return None
+    return status if status.get("connected") else None
+
+
+def yeti_hw_problem():
+    """Texto curto se o hardware do Yeti explica falta de áudio, senão None."""
+    hw = yeti_hw_status()
+    if not hw:
+        return None
+    if hw.get("muted"):
+        return "Yeti mutado no hardware"
+    if hw.get("gain") is not None and hw["gain"] < 20:
+        return f"Ganho do Yeti em {hw['gain']}/100"
+    return None
+
+
 def _level_bar(rms, width=30):
     """Barra em dBFS: -80 dB vazio, -20 dB cheio."""
     db = 20 * math.log10(max(rms, 1e-8))
@@ -2371,6 +2397,12 @@ def run_calibration(config):
     """Mede ruído e voz, diagnostica o mic e grava silence_threshold no config."""
     mic = config.get("mic_device", "@DEFAULT_SOURCE@")
     print(f"Microfone: {mic}")
+    hw = yeti_hw_status()
+    if hw:
+        print(f"Yeti GX (hardware): ganho {hw.get('gain')}/100, {'MUTADO' if hw.get('muted') else 'ativo'}")
+        if hw.get("muted"):
+            print("Desmute (toque no knob ou OBSBOT Control) e rode de novo. Nada salvo.")
+            return 1
     capture = AudioCapture(mic, config["sample_rate"])
     capture.start()
     try:
@@ -2406,6 +2438,8 @@ def run_calibration(config):
         return 1
     if voice < max(noise * 4, THRESHOLD_FLOOR / 5):
         print("\nA voz não se destacou do ruído: mic mutado, ganho no mínimo ou longe demais. Nada salvo.")
+        if hw and hw.get("gain") is not None and hw["gain"] < 20:
+            print(f"Causa provável: ganho de hardware do Yeti em {hw['gain']}/100 (suba no OBSBOT Control).")
         return 1
 
     # Acima do ruído e bem abaixo da voz: confirma fala sem disparar no ambiente.
