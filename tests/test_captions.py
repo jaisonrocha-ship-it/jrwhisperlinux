@@ -123,12 +123,47 @@ def test_cjk_leak_is_stripped():
     assert th.lines == ["O navio chega,"]
 
 
+def test_hunyuan_uses_official_prompt():
+    sent = []
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "Olá"}}
+    real = captions.ai._http.post
+    captions.ai._http.post = lambda url, json=None, timeout=None: sent.append(json) or Resp()
+    try:
+        cfg = {"ai_ollama_model": "hy-mt1.5-1.8b"}
+        assert captions.ai.translate_hymt(cfg, "Hello", "pt", "en") == "Olá"
+        captions.ai.translate_hymt(cfg, "你好", "pt", "zh")
+    finally:
+        captions.ai._http.post = real
+    en, zh = (m["messages"] for m in sent)
+    assert len(en) == 1 and en[0]["content"].startswith("Translate the following segment into Brazilian Portuguese")
+    assert zh[0]["content"].startswith("将以下文本翻译为巴西葡萄牙语")  # origem chinesa: template chinês
+
+
+def test_pick_hunyuan_or_fall_back():
+    real = captions._ollama_models
+    try:
+        captions._ollama_models = lambda cfg: ["qwen2.5:latest", "hy-mt1.5-1.8b:latest"]
+        cfg = captions.pick_translator({"caption_translator": "hymt"})
+        assert cfg["caption_hymt"] and cfg["ai_ollama_model"] == "hy-mt1.5-1.8b:latest"
+        captions._ollama_models = lambda cfg: []
+        assert not captions.pick_translator({"caption_translator": "hymt"}).get("caption_hymt")  # sem modelo: automático
+    finally:
+        captions._ollama_models = real
+
+
 def run_tests():
     failed = False
     for fn in (test_cuts_on_pauses, test_quiet_video_still_cuts, test_silence_only_never_emits_and_stays_small,
                test_continuous_speech_cut_at_quietest_point, test_asr_cut_keeps_epoch_honest,
                test_queued_sentences_go_in_one_call, test_429_retries_instead_of_showing_original,
-               test_same_language_skips_ai_and_failure_falls_back, test_cjk_leak_is_stripped):
+               test_same_language_skips_ai_and_failure_falls_back, test_cjk_leak_is_stripped,
+               test_hunyuan_uses_official_prompt, test_pick_hunyuan_or_fall_back):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")

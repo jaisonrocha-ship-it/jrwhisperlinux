@@ -112,6 +112,29 @@ def complete(config, instruction, text, timeout=None, system=SYSTEM):
     return out
 
 
+HYMT_LANGS = {"pt": ("Brazilian Portuguese", "巴西葡萄牙语"), "en": ("English", "英语"), "es": ("Spanish", "西班牙语")}
+
+
+def translate_hymt(config, text, target, source_lang, timeout=6):
+    """Hunyuan MT 1.5 (Tencent, local no Ollama) com o prompt oficial: sem system prompt, e o template
+    em chinês quando a origem é chinês. Modelo de tradução: um LLM genérico aqui inventaria."""
+    en, zh = HYMT_LANGS.get(target, (target, target))
+    prompt = (f"将以下文本翻译为{zh}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}" if source_lang == "zh"
+              else f"Translate the following segment into {en}, without additional explanation.\n\n{text}")
+    try:
+        r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
+                       json={"model": config["ai_ollama_model"], "stream": False, "keep_alive": "30m",  # recarregar leva ~12 s
+                             "messages": [{"role": "user", "content": prompt}], "options": {"temperature": 0.2}},
+                       timeout=timeout)
+        r.raise_for_status()
+        out = r.json()["message"]["content"].strip()
+    except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+        raise AIError(str(e) or type(e).__name__) from e
+    if not out:
+        raise AIError("resposta vazia")
+    return out
+
+
 def enabled_modes(config):
     return [m for m in config.get("ai_modes", []) if m.get("enabled", True)]
 

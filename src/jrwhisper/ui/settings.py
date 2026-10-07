@@ -556,10 +556,11 @@ class SettingsWindow(Gtk.Window):
                                                ("", "Idioma original (sem traduzir)")],
                      self.config.get("caption_language", "pt"), lambda v: self.set("caption_language", v))
         t.choice_row(lb, "Tradutor", "DeepSeek: a melhor tradução, ~0,9 s, sem limite. NVIDIA: ~0,4 s, prévia "
-                     "a cada 2,5 s (limite do plano grátis). Ollama: local, mas os modelos que cabem na GPU "
-                     "traduzem pior.",
-                     [("auto", "Automático (DeepSeek, NVIDIA, Ollama)"), ("ollama", "Ollama (local)"),
-                      ("nvidia", "NVIDIA NIM (nuvem)"), ("deepseek", "DeepSeek (nuvem)")],
+                     "a cada 2,5 s (limite do plano grátis). Hunyuan MT: local no Ollama, 0,2 s e 2,2 GB de GPU, "
+                     "mas às vezes acrescenta trechos. Troca vale na próxima legenda; nada para reiniciar.",
+                     [("auto", "Automático (DeepSeek, NVIDIA, Ollama)"), ("deepseek", "DeepSeek (nuvem)"),
+                      ("nvidia", "NVIDIA NIM (nuvem)"), ("hymt", "Hunyuan MT 1.5 (local)"),
+                      ("ollama", "Ollama (outro modelo local)")],
                      self.config.get("caption_translator", "auto"), lambda v: self.set("caption_translator", v))
         t.slider_row(lb, "Linhas na tela", None, 3, 14, 1, self.config.get("caption_lines", 8),
                      lambda v: f"{int(v)}", lambda v: self.set("caption_lines", int(v)))

@@ -119,21 +119,30 @@ class Chunker:
         return chunk
 
 
+def _ollama_models(config):
+    try:
+        url = config.get("ai_ollama_url", "http://localhost:11434")
+        return [m["name"] for m in requests.get(url + "/api/tags", timeout=1).json()["models"]]
+    except (requests.RequestException, ValueError, KeyError):
+        return []
+
+
 def pick_translator(config):
     """Config de IA para traduzir legendas. "auto" escolhe pela qualidade medida (chrF → pt-BR, 21 frases
     en/ru/zh/es): DeepSeek 89,3 (sem limite) > NVIDIA 82,7 (limite ~40/min) > Ollama local. Locais testados
     e descartados: NLLB-200 1.3B 72,8 (português de Portugal) e Hunyuan MT 1.5 1.8B ~71 (inventava trechos,
     completava frases); qwen2.5 7B vazava chinês."""
     choice = config.get("caption_translator", "auto")
+    if choice == "hymt":  # Hunyuan MT 1.5 no Ollama (o usuário cria com o Modelfile do README da Tencent)
+        model = next((n for n in _ollama_models(config) if n.lower().startswith(("hy-mt", "hf.co/tencent/hy-mt"))), None)
+        if model:
+            return dict(config, ai_provider="ollama", ai_ollama_model=model, caption_hymt=True)
+        _debug_log("Legendas: Hunyuan MT não está no Ollama; usando o automático")
+        choice = "auto"
     if choice == "auto":
         choice = next((p for p in ("deepseek", "nvidia") if secrets.get_key(p)), "auto")
     if choice in ("auto", "ollama"):
-        url = config.get("ai_ollama_url", "http://localhost:11434")
-        try:
-            names = [m["name"] for m in requests.get(url + "/api/tags", timeout=1).json()["models"]]
-        except (requests.RequestException, ValueError, KeyError):
-            names = []
-        chat = [n for n in names if "embed" not in n]
+        chat = [n for n in _ollama_models(config) if "embed" not in n and "hy-mt" not in n.lower()]
         wanted = config.get("ai_ollama_model", "")
         model = next((n for n in chat if n in (wanted, f"{wanted}:latest")), chat[0] if chat else None)
         if model:
@@ -336,7 +345,7 @@ class CaptionThread(threading.Thread):
             self._sent.popleft()
         return NIM_PER_MIN - len(self._sent)
 
-    def _translate(self, text, prev="", retries=0):
+    def _translate(self, text, prev="", retries=0, lang=None):
         """Tradução, ou None se falhou (a prévia espera a próxima; frase fechada tenta de novo)."""
         context = f"\nFrase anterior, só como contexto (não traduza): {prev}" if prev else ""
         lang_name = LANG_NAMES.get(self.target, self.target)
@@ -346,8 +355,11 @@ class CaptionThread(threading.Thread):
             self._sent.append(time.time())
             t0 = time.time()
             try:
-                out = ai.complete(self.mt_cfg, f"Traduza para {lang_name}.", f"<fala>{text}</fala>", timeout=6,
-                                  system=f"{SYSTEM} Responda somente em {lang_name}.{context}")
+                if self.mt_cfg.get("caption_hymt"):
+                    out = ai.translate_hymt(self.mt_cfg, text, self.target, lang)
+                else:
+                    out = ai.complete(self.mt_cfg, f"Traduza para {lang_name}.", f"<fala>{text}</fala>", timeout=6,
+                                      system=f"{SYSTEM} Responda somente em {lang_name}.{context}")
                 out = TAGS.sub("", out).strip()
             except ai.AIError as e:
                 _debug_log(f"Legendas: tradução falhou ({e})")
@@ -368,9 +380,10 @@ class CaptionThread(threading.Thread):
         if self.target and not self.whisper_translates:
             self.mt_cfg = pick_translator(self.config)
             local = self.mt_cfg.get("ai_provider") == "ollama"
-            _debug_log(f"Legendas: tradutor {self.mt_cfg.get('ai_provider')}")
+            _debug_log(f"Legendas: tradutor {self.mt_cfg.get('ai_provider')} "
+                       f"{self.mt_cfg.get('ai_ollama_model') if local else ''}")
             if local:  # carrega o modelo já (a 1ª chamada leva ~8 s), enquanto o idioma ainda é detectado
-                self._translate("ok")
+                self._translate("ok", lang="en")
         live_gap = NIM_LIVE_GAP if self.mt_cfg.get("ai_provider", "nvidia") == "nvidia" else 0.0
         last_live = 0.0
         stop = False
@@ -383,7 +396,7 @@ class CaptionThread(threading.Thread):
                 if (src and src != done and self._needs_mt(lang) and time.time() - last_live >= live_gap
                         and self._budget() > NIM_RESERVE):  # a prévia nunca gasta o que as frases precisam
                     last_live = time.time()
-                    out = self._translate(src, prev)
+                    out = self._translate(src, prev, lang=lang)
                     with self._lock:
                         if out and self.gen == gen:  # a prévia não virou frase fechada enquanto traduzia
                             self.live.update(tr=out, tr_src=src)
@@ -405,7 +418,7 @@ class CaptionThread(threading.Thread):
             lang = next((l for t, l in batch if t), batch[0][1])
             out = text
             if text and self._needs_mt(lang):
-                out = self._translate(text, prev, retries=3)
+                out = self._translate(text, prev, retries=3, lang=lang)
                 if out is None:  # só depois de insistir: o original, com aviso
                     out = text
                     if not self._warned:
