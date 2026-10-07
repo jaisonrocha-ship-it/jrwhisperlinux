@@ -62,7 +62,60 @@ DEFAULT_CONFIG = {
         "bl": "B/L",
         "booking": "Booking",
         "incoterms": "Incoterms"
-    }
+    },
+    # Geral
+    "sounds": False,
+    # Atalhos de texto: gatilho falado → expansão (aceita várias linhas)
+    "snippets": {},
+    # Inteligência (reescrita com IA). A chave da API fica no keyring, nunca aqui.
+    "ai_enabled": False,
+    "ai_provider": "nvidia",
+    "ai_model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "ai_ollama_url": "http://localhost:11434",
+    "ai_ollama_model": "llama3.2",
+    "ai_default_mode": "",
+    "ai_voice_prefix": True,
+    "ai_timeout": 8.0,
+    "ai_modes": [
+        {"id": "corrigir", "name": "Corrigir", "enabled": True,
+         "prompt": "Corrija ortografia, gramática e pontuação do texto ditado, mantendo palavras, tom e idioma. "
+                   "Responda só com o texto corrigido."},
+        {"id": "email", "name": "E-mail", "enabled": True,
+         "prompt": "Reescreva o texto ditado como um e-mail profissional e cordial em português, com saudação e "
+                   "despedida curtas. Não invente fatos. Responda só com o e-mail."},
+        {"id": "mensagem", "name": "Mensagem", "enabled": True,
+         "prompt": "Reescreva o texto ditado como uma mensagem curta e natural de chat, mantendo o sentido. "
+                   "Responda só com a mensagem."},
+        {"id": "ingles", "name": "Inglês", "enabled": True,
+         "prompt": "Traduza o texto ditado para inglês natural e fluente, mantendo o tom. Responda só com a tradução."},
+        {"id": "topicos", "name": "Tópicos", "enabled": True,
+         "prompt": "Transforme o texto ditado em uma lista de tópicos objetiva, um item por linha começando com "
+                   "\"- \". Responda só com a lista."},
+    ],
+    # Perfis por aplicativo (classe da janela → regras)
+    "profiles_enabled": False,
+    "profiles": [
+        {"match": "kitty|guake|gnome-terminal|xterm|terminator|tilix|alacritty|wezterm|konsole",
+         "name": "Terminais", "paste": "ctrl+shift+v", "formatting": False, "final_period": False,
+         "capitalize": False, "ai_mode": ""},
+        {"match": "code|cursor|jetbrains|sublime_text|zed",
+         "name": "Editores de código", "paste": "ctrl+v", "formatting": True, "final_period": False,
+         "capitalize": True, "ai_mode": ""},
+        {"match": "slack|discord|telegram|whatsapp|signal",
+         "name": "Chat", "paste": "ctrl+v", "formatting": True, "final_period": False,
+         "capitalize": True, "ai_mode": ""},
+        {"match": "thunderbird|evolution|geary",
+         "name": "E-mail", "paste": "ctrl+v", "formatting": True, "final_period": True,
+         "capitalize": True, "ai_mode": ""},
+    ],
+    # Histórico
+    "history_enabled": False,
+    "history_retention_days": 30,
+    # Mãos livres
+    "ptt_enabled": False,
+    "handsfree_enabled": False,
+    "handsfree_idle_secs": 20,
+    "handsfree_stop_phrase": "parar ditado",
 }
 
 

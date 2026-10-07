@@ -1,616 +1,940 @@
-import subprocess
-from gi.repository import Gtk, GLib, GdkPixbuf
+"""Ajustes do Whisper no estilo Ajustes do Sistema do macOS.
 
-from ..audio import calibration_state, default_source_name, list_mic_devices
-from ..config import _debug_log, save_config
+Sidebar com ícones, páginas com grupos arredondados e aplicação instantânea
+(sem Salvar/Cancelar): cada mudança grava o config com debounce e escrita atômica.
+Recursos avançados ficam atrás de um switch mestre em cada aba.
+"""
+import copy
+import math
+import os
+import subprocess
+import threading
+
+import cairo
+import numpy as np
+
+from gi.repository import Gtk, Gdk, GLib
+
+from .. import history, shortcuts
+from ..audio import (AudioCapture, calibration_state, default_source_name, friendly_mic_name,
+                     list_source_names, resolve_mic, rms_db)
+from ..config import DEFAULT_CONFIG, RUNTIME_DIR, _debug_log, save_config
 from ..transcribe import is_daemon_running
+from . import theme as t
 from .calibration import CalibrationWindow
-from .theme import apply_settings_css
+from .visuals import VISUAL_LABELS, make_visual, rounded_rect, spectrum_bands
+
+DICTATE_CMD = os.path.expanduser("~/.local/bin/dictate")
+CRITICAL_KEYS = ("model", "language", "initial_prompt")  # exigem reiniciar o daemon
+
+PAGES = [
+    # id, rótulo, ícone, cor do quadradinho
+    ("general", "Geral", "settings", "#8E8E93"),
+    ("appearance", "Aparência", "palette", "#7C6CFF"),
+    ("microphone", "Microfone", "mic", "#FF5E57"),
+    ("recognition", "Reconhecimento", "audio-lines", "#0A84FF"),
+    ("text", "Texto", "type", "#FF9F0A"),
+    ("ai", "Inteligência", "sparkles", "#BF5AF2"),
+    ("apps", "Aplicativos", "app-window", "#30B0C7"),
+    ("history", "Histórico", "history", "#64D2FF"),
+    ("handsfree", "Mãos livres", "keyboard", "#30D158"),
+    ("advanced", "Avançado", "sliders", "#636366"),
+]
+
+
+class VisualPreview(Gtk.DrawingArea):
+    """Pré-visualização do overlay reagindo ao mic de verdade (ou a uma voz simulada)."""
+
+    def __init__(self, config):
+        super().__init__()
+        self.set_size_request(-1, 250)
+        self.config = config
+        self.visual = make_visual(config)
+        self.capture = None
+        self._last = None
+        self.connect("draw", self._draw)
+        self.connect("map", lambda *_: self._start())
+        self.connect("unmap", lambda *_: self._stop())
+        self.add_tick_callback(self._tick)
+
+    def rebuild(self):
+        self.visual = make_visual(self.config)
+        self.visual.set_state("listening")
+
+    def _start(self):
+        mic, _ = resolve_mic(self.config)
+        self.capture = AudioCapture(mic, self.config.get("sample_rate", 16000))
+        self.capture.start()
+        self.visual.set_state("listening")
+
+    def _stop(self):
+        if self.capture:
+            self.capture.stop()
+            self.capture = None
+
+    def _tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        dt = min(now - self._last, 0.05) if self._last else 1 / 60
+        self._last = now
+        if self.capture:
+            rms = self.capture.get_rms()
+            level = min(rms / 0.012, 1.0) if rms > 0 else 0.0
+            if level < 0.02:  # mic mudo: voz simulada para ver o visual se mexer
+                level = 0.35 + 0.25 * abs(math.sin(now * 1.7))
+            self.visual.set_level(level)
+            if self.config.get("overlay_style") == "bars":
+                bands = spectrum_bands(self.capture.recent_samples())
+                if bands.max() < 0.05:
+                    i = np.arange(32)
+                    bands = 0.3 + 0.3 * np.abs(np.sin(i * 0.45 + now * 3))
+                self.visual.set_bands(bands)
+        self.visual.advance(dt)
+        self.queue_draw()
+        return True
+
+    def _draw(self, w, cr):
+        width, height = w.get_allocated_width(), w.get_allocated_height()
+        rounded_rect(cr, 0, 0, width, height, 12)
+        cr.clip()
+        g = cairo.LinearGradient(0, 0, width, height)
+        g.add_color_stop_rgb(0, 0.10, 0.11, 0.15)
+        g.add_color_stop_rgb(1, 0.16, 0.13, 0.20)
+        cr.set_source(g)
+        cr.paint()
+        self.visual.draw(cr, width / 2, height / 2)
+        return False
+
+
+class LevelMeter(Gtk.DrawingArea):
+    """Barra fina de nível (dBFS) do mic selecionado, ao vivo."""
+
+    def __init__(self, get_mic, sample_rate):
+        super().__init__()
+        self.set_size_request(220, 8)
+        self.set_valign(Gtk.Align.CENTER)
+        self.get_mic = get_mic
+        self.sr = sample_rate
+        self.capture = None
+        self.level = 0.0
+        self.connect("draw", self._draw)
+        self.connect("map", lambda *_: self.restart())
+        self.connect("unmap", lambda *_: self.stop())
+        self.add_tick_callback(self._tick)
+
+    def restart(self):
+        self.stop()
+        self.capture = AudioCapture(self.get_mic(), self.sr)
+        self.capture.start()
+
+    def stop(self):
+        if self.capture:
+            self.capture.stop()
+            self.capture = None
+
+    def _tick(self, *_):
+        target = (rms_db(self.capture.get_rms()) + 80) / 80 if self.capture else 0
+        self.level += (max(0.0, min(target, 1.0)) - self.level) * 0.35
+        self.queue_draw()
+        return True
+
+    def _draw(self, w, cr):
+        width, height = w.get_allocated_width(), w.get_allocated_height()
+        rounded_rect(cr, 0, 0, width, height, height / 2)
+        cr.set_source_rgba(1, 1, 1, 0.10)
+        cr.fill()
+        if self.level > 0.01:
+            g = cairo.LinearGradient(0, 0, width, 0)
+            g.add_color_stop_rgb(0, 0.19, 0.82, 0.35)
+            g.add_color_stop_rgb(0.75, 1.0, 0.78, 0.24)
+            g.add_color_stop_rgb(1, 1.0, 0.33, 0.33)
+            rounded_rect(cr, 0, 0, width * self.level, height, height / 2)
+            cr.set_source(g)
+            cr.fill()
+        return False
 
 
 class SettingsWindow(Gtk.Window):
-    def __init__(self, config):
-        Gtk.Window.__init__(self, title="Configurações do Dictate")
-        self.set_default_size(650, 550)
+    def __init__(self, config, page="general"):
+        Gtk.Window.__init__(self, title="Ajustes do Whisper")
+        self.set_default_size(900, 640)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.config = config
-        self.original_config = dict(config)
-
-        # SVG Icon (Microfone discreto e profissional)
-        svg_icon = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="#64DCFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
-          <line x1="12" y1="18" x2="12" y2="22"/>
-          <line x1="9" y1="22" x2="15" y2="22"/>
-        </svg>"""
-
-        pixbuf = None
+        self._save_id = 0
+        self._critical_changed = False
+        t.apply_theme(self.get_screen(), config)
         try:
-            loader = GdkPixbuf.PixbufLoader.new_with_type("svg")
-            loader.set_size(32, 32)
-            loader.write(svg_icon.encode('utf-8'))
-            loader.close()
-            pixbuf = loader.get_pixbuf()
-            self.set_icon(pixbuf)
+            self.set_icon(t._svg_pixbuf(
+                f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" '
+                f'fill="{t.ui_accent(config)}"/><g transform="translate(5 5) scale(0.5833)" fill="none" stroke="#fff" '
+                f'stroke-width="2.3" stroke-linecap="round">{t.ICONS["mic"]}</g></svg>', 64))
         except Exception as e:
-            _debug_log(f"Falha ao carregar ícone SVG da janela: {e}")
+            _debug_log(f"Ícone da janela: {e}")
 
-        self.apply_premium_css()
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.add(root)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.add(main_box)
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side.get_style_context().add_class("sidebar")
+        side.set_size_request(220, -1)
+        brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        brand.set_margin_top(18)
+        brand.set_margin_bottom(8)
+        brand.set_margin_start(20)
+        brand.pack_start(t.tile_icon("mic", t.ui_accent(config), 28), False, False, 0)
+        names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        names.pack_start(t.label("JRWhisper", "row-title"), False, False, 0)
+        names.pack_start(t.label("Ditado por voz", "row-subtitle"), False, False, 0)
+        brand.pack_start(names, False, False, 0)
+        side.pack_start(brand, False, False, 0)
 
-        # Header/Title Bar (Layout horizontal com ícone + textos)
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
-        header.set_name("settings-header")
-        header.set_margin_top(16)
-        header.set_margin_bottom(16)
-        header.set_margin_start(20)
-        header.set_margin_end(20)
-
-        # Caixa vertical de textos
-        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-
-        title_label = Gtk.Label()
-        title_label.set_markup("<span size='large' weight='bold' foreground='#FFFFFF'>Configurações do Dictate</span>")
-        title_label.set_halign(Gtk.Align.START)
-        text_box.pack_start(title_label, False, False, 0)
-
-        subtitle_label = Gtk.Label()
-        subtitle_label.set_markup("<span size='small' foreground='#FFFFFF80'>Ajuste as preferências de captação, modelo e formatação inteligente.</span>")
-        subtitle_label.set_halign(Gtk.Align.START)
-        text_box.pack_start(subtitle_label, False, False, 0)
-
-        header.pack_start(text_box, True, True, 0)
-
-        if pixbuf:
-            img_icon = Gtk.Image.new_from_pixbuf(pixbuf)
-            img_icon.set_valign(Gtk.Align.CENTER)
-            img_icon.set_halign(Gtk.Align.END)
-            header.pack_end(img_icon, False, False, 0)
-
-        main_box.pack_start(header, False, False, 0)
-
-        # Content Box
-        content_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        main_box.pack_start(content_box, True, True, 0)
-
+        self.sidebar = Gtk.ListBox()
+        self.sidebar.get_style_context().add_class("sidebar")
         self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self.stack.set_transition_duration(200)
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.stack.set_transition_duration(120)
+        for pid, plabel, picon, pcolor in PAGES:
+            row = Gtk.ListBoxRow()
+            row.page_id = pid
+            h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            h.pack_start(t.tile_icon(picon, pcolor), False, False, 0)
+            h.pack_start(t.label(plabel, "sidebar-label"), False, False, 0)
+            row.add(h)
+            self.sidebar.add(row)
+            self.stack.add_named(getattr(self, f"page_{pid}")(), pid)
+        self.sidebar.connect("row-selected", lambda lb, r: r and self.stack.set_visible_child_name(r.page_id))
+        side.pack_start(self.sidebar, True, True, 0)
+        root.pack_start(side, False, False, 0)
+        sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        sep.get_style_context().add_class("sidebar-sep")
+        root.pack_start(sep, False, False, 0)
+        root.pack_start(self.stack, True, True, 0)
 
-        sidebar = Gtk.StackSidebar()
-        sidebar.set_stack(self.stack)
-        sidebar.set_size_request(160, -1)
-        sidebar.set_name("settings-sidebar")
+        self.connect("destroy", self._on_destroy)
+        idx = [p[0] for p in PAGES].index(page) if page in [p[0] for p in PAGES] else 0
+        self.sidebar.select_row(self.sidebar.get_row_at_index(idx))
 
-        content_box.pack_start(sidebar, False, False, 0)
+    # ── persistência ───────────────────────────────────────────────
+    def set(self, key, value):
+        if self.config.get(key) == value:
+            return
+        self.config[key] = value
+        if key in CRITICAL_KEYS:
+            self._critical_changed = True
+            self._show_restart_callout()
+        if self._save_id:
+            GLib.source_remove(self._save_id)
+        self._save_id = GLib.timeout_add(350, self._flush)
 
-        # Separator
-        separator = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        content_box.pack_start(separator, False, False, 0)
+    def _flush(self):
+        self._save_id = 0
+        save_config(self.config)
+        return False
 
-        # Pack Pages
-        self.stack.add_titled(self.create_recognition_page(), "recognition", "Reconhecimento")
-        self.stack.add_titled(self.create_audio_page(), "audio", "Áudio & Captação")
-        self.stack.add_titled(self.create_formatting_page(), "formatting", "Formatação")
-        self.stack.add_titled(self.create_overrides_page(), "overrides", "Dicionário")
+    def _on_destroy(self, *_):
+        if self._save_id:
+            GLib.source_remove(self._save_id)
+            self._flush()
+        Gtk.main_quit()
 
-        content_box.pack_start(self.stack, True, True, 0)
+    # ── helpers de UI ──────────────────────────────────────────────
+    def _feature_gate(self, box, key, title, description):
+        """Switch mestre: com o recurso desligado, o resto da página fica oculto."""
+        lb = t.group(box)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
 
-        # Bottom Action Bar
-        action_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        action_bar.set_name("action-bar")
-        action_bar.set_margin_top(14)
-        action_bar.set_margin_bottom(14)
-        action_bar.set_margin_start(20)
-        action_bar.set_margin_end(20)
-        action_bar.set_halign(Gtk.Align.END)
+        def toggle(on):
+            self.set(key, on)
+            content.set_visible(on)
+        t.switch_row(lb, title, description, self.config.get(key), toggle)
+        box.pack_start(content, False, False, 0)
+        content.set_no_show_all(False)
+        GLib.idle_add(lambda: content.set_visible(bool(self.config.get(key))))
+        return content
 
-        btn_cancel = Gtk.Button(label="Cancelar")
-        btn_cancel.connect("clicked", self.on_cancel_clicked)
-        btn_cancel.get_style_context().add_class("btn-secondary")
-        action_bar.pack_start(btn_cancel, False, False, 0)
+    def _dialog(self, title, build, ok_label="Salvar"):
+        """Folha modal simples; build(box) monta campos e devolve uma função que lê os valores."""
+        dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dlg.set_default_size(460, -1)
+        area = dlg.get_content_area()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(18)
+        area.add(box)
+        read = build(box)
+        dlg.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button(ok_label, Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("btn-primary")
+        dlg.show_all()
+        result = read() if dlg.run() == Gtk.ResponseType.OK else None
+        dlg.destroy()
+        return result
 
-        btn_save = Gtk.Button(label="Salvar")
-        btn_save.connect("clicked", self.on_save_clicked)
-        btn_save.get_style_context().add_class("btn-primary")
-        action_bar.pack_start(btn_save, False, False, 0)
+    def _shortcut_row(self, lb, title, subtitle, name, command):
+        current = shortcuts.get_binding(command)
+        keycap = t.label(shortcuts.pretty(current), "keycap")
+        btn = Gtk.Button(label="Alterar…")
+        box = Gtk.Box(spacing=10)
+        box.pack_start(keycap, False, False, 0)
+        box.pack_start(btn, False, False, 0)
 
-        main_box.pack_start(action_bar, False, False, 0)
+        def record(_b):
+            accel = self._record_accel(title)
+            if accel:
+                try:
+                    shortcuts.set_binding(name, command, accel)
+                    keycap.set_text(shortcuts.pretty(accel))
+                except Exception as e:
+                    self._error("Não foi possível gravar o atalho", str(e))
+        btn.connect("clicked", record)
+        t.row(lb, title, subtitle, box)
 
-        self.connect("destroy", Gtk.main_quit)
+    def _record_accel(self, what):
+        dlg = Gtk.Dialog(title="Novo atalho", transient_for=self, modal=True)
+        dlg.set_default_size(360, 160)
+        box = dlg.get_content_area()
+        box.set_spacing(10)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{side}")(22)
+        box.pack_start(t.label(what, "row-title", xalign=0.5), False, False, 0)
+        cap = t.label("Pressione a combinação…", "keycap", xalign=0.5)
+        box.pack_start(cap, False, False, 6)
+        box.pack_start(t.label("Esc cancela", "row-subtitle", xalign=0.5), False, False, 0)
+        result = {}
 
-    def apply_premium_css(self):
-        apply_settings_css(self.get_screen())
+        def on_key(_w, ev):
+            mods = ev.state & Gtk.accelerator_get_default_mod_mask()
+            if ev.keyval == Gdk.KEY_Escape and not mods:
+                dlg.response(Gtk.ResponseType.CANCEL)
+                return True
+            if Gtk.accelerator_valid(ev.keyval, mods) and mods:
+                accel = Gtk.accelerator_name(Gdk.keyval_to_lower(ev.keyval), mods)
+                result["accel"] = accel.replace("<Mod4>", "<Super>")
+                cap.set_text(shortcuts.pretty(result["accel"]))
+                GLib.timeout_add(350, lambda: dlg.response(Gtk.ResponseType.OK) or False)
+            return True
+        dlg.connect("key-press-event", on_key)
+        dlg.show_all()
+        ok = dlg.run() == Gtk.ResponseType.OK
+        dlg.destroy()
+        return result.get("accel") if ok else None
 
-    def create_recognition_page(self):
-        grid = Gtk.Grid()
-        grid.set_column_spacing(15)
-        grid.set_row_spacing(15)
-        grid.set_margin_top(15)
-        grid.set_margin_bottom(15)
-        grid.set_margin_start(15)
-        grid.set_margin_end(15)
+    def _error(self, title, text):
+        d = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
+                              buttons=Gtk.ButtonsType.OK, text=title)
+        d.format_secondary_text(text)
+        d.run()
+        d.destroy()
 
-        # Modelo Whisper
-        lbl_model = Gtk.Label(label="Modelo Whisper:")
-        lbl_model.set_halign(Gtk.Align.START)
-        self.combo_model = Gtk.ComboBoxText()
-        models = ["tiny", "base", "small", "medium", "large-v3"]
-        for m in models:
-            self.combo_model.append(m, m)
-        self.combo_model.set_active_id(self.config.get("model", "medium"))
+    def _confirm(self, title, text, ok_label):
+        d = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.QUESTION,
+                              buttons=Gtk.ButtonsType.NONE, text=title)
+        d.format_secondary_text(text)
+        d.add_button("Cancelar", Gtk.ResponseType.CANCEL)
+        b = d.add_button(ok_label, Gtk.ResponseType.OK)
+        b.get_style_context().add_class("btn-danger")
+        ok = d.run() == Gtk.ResponseType.OK
+        d.destroy()
+        return ok
 
-        grid.attach(lbl_model, 0, 0, 1, 1)
-        grid.attach(self.combo_model, 1, 0, 1, 1)
+    def _kv_editor(self, box, title, footer, key, key_ph, val_ph, multiline=False):
+        """Lista editável gatilho → valor (dicionário, atalhos de texto)."""
+        lb = t.group(box, title, footer)
 
-        # Idioma
-        lbl_lang = Gtk.Label(label="Idioma Padrão:")
-        lbl_lang.set_halign(Gtk.Align.START)
-        self.combo_lang = Gtk.ComboBoxText()
-        self.combo_lang.append("pt", "Português (pt)")
-        self.combo_lang.append("en", "Inglês (en)")
-        self.combo_lang.append("es", "Espanhol (es)")
-        self.combo_lang.append("auto", "Detectar automaticamente")
-        self.combo_lang.set_active_id(self.config.get("language", "pt"))
+        def save():
+            data = {}
+            for r in lb.get_children():
+                if hasattr(r, "read"):
+                    k, v = r.read()
+                    if k.strip() and v.strip():
+                        data[k.strip().lower()] = v.strip() if not multiline else v.rstrip()
+            self.set(key, data)
 
-        grid.attach(lbl_lang, 0, 1, 1, 1)
-        grid.attach(self.combo_lang, 1, 1, 1, 1)
+        def add_row(k="", v=""):
+            r = Gtk.ListBoxRow()
+            r.set_activatable(False)
+            h = Gtk.Box(spacing=10)
+            ek = Gtk.Entry(text=k, placeholder_text=key_ph)
+            ek.set_width_chars(16)
+            if multiline:
+                buf = Gtk.TextBuffer(text=v)
+                ev = Gtk.TextView(buffer=buf)
+                ev.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+                ev.set_size_request(-1, 54)
+                buf.connect("changed", lambda *_: save())
+                read_v = lambda: buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
+            else:
+                ev = Gtk.Entry(text=v, placeholder_text=val_ph)
+                ev.connect("changed", lambda *_: save())
+                read_v = ev.get_text
+            ek.connect("changed", lambda *_: save())
+            rm = Gtk.Button()
+            rm.add(t.icon("trash", 14, "#98989D"))
+            rm.get_style_context().add_class("btn-flat")
+            rm.set_tooltip_text("Remover")
+            rm.connect("clicked", lambda _b: (lb.remove(r), save()))
+            h.pack_start(ek, False, False, 0)
+            h.pack_start(t.label("→", "dim"), False, False, 0)
+            h.pack_start(ev, True, True, 0)
+            h.pack_start(rm, False, False, 0)
+            r.add(h)
+            r.read = lambda: (ek.get_text(), read_v())
+            lb.insert(r, len(lb.get_children()) - 1)
+            r.show_all()
+            return ek
 
-        # Prompt Inicial
-        lbl_prompt = Gtk.Label(label="Prompt Inicial:")
-        lbl_prompt.set_halign(Gtk.Align.START)
-        lbl_prompt.set_valign(Gtk.Align.START)
+        add = Gtk.ListBoxRow()
+        add.set_activatable(False)
+        b = Gtk.Button()
+        hb = Gtk.Box(spacing=6)
+        hb.pack_start(t.icon("plus", 14, t.ui_accent(self.config)), False, False, 0)
+        hb.pack_start(t.label("Adicionar"), False, False, 0)
+        b.add(hb)
+        b.get_style_context().add_class("btn-flat")
+        b.set_halign(Gtk.Align.START)
+        b.connect("clicked", lambda _b: add_row().grab_focus())
+        add.add(b)
+        lb.add(add)
+        for k, v in (self.config.get(key) or {}).items():
+            add_row(k, v)
 
-        self.prompt_buffer = Gtk.TextBuffer()
-        self.prompt_buffer.set_text(self.config.get("initial_prompt", ""))
+    # ── páginas ────────────────────────────────────────────────────
+    def page_general(self):
+        root, box = t.page("Geral", "O essencial do ditado.")
+        lb = t.group(box, "Ditado")
+        self._shortcut_row(lb, "Atalho de ditado", "Toque para ditar; aperte de novo para cancelar.",
+                           "Dictate", DICTATE_CMD)
+        t.choice_row(lb, "Idioma", None, [("pt", "Português"), ("en", "Inglês"), ("es", "Espanhol"),
+                                          ("auto", "Detectar automaticamente")],
+                     self.config.get("language", "pt"), lambda v: self.set("language", v))
+        t.switch_row(lb, "Sons de início e fim", "Um toque discreto ao começar a ouvir e ao colar.",
+                     self.config.get("sounds"), lambda v: self.set("sounds", v))
 
-        prompt_view = Gtk.TextView(buffer=self.prompt_buffer)
-        prompt_view.set_wrap_mode(Gtk.WrapMode.WORD)
-        prompt_view.set_size_request(-1, 120)
+        lb = t.group(box, "Serviço", "O serviço mantém o modelo na memória (GPU) para o ditado começar sem espera.")
+        running = is_daemon_running()
+        sw = Gtk.Switch()
+        sw.set_active(running)
+        row = t.row(lb, "Manter modelo carregado", "Em execução" if running else "Parado", sw)
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_shadow_type(Gtk.ShadowType.IN)
-        scroll.add(prompt_view)
+        def toggle_daemon(s, _p):
+            on = s.get_active()
+            cmd = ["systemctl", "--user", "enable" if on else "disable", "--now", "dictate-daemon"]
+            subprocess.run(cmd, capture_output=True, timeout=15)
+            row.subtitle.set_text("Iniciando…" if on else "Parado")
+        sw.connect("notify::active", toggle_daemon)
+        box.pack_start(t.label("JRWhisperLinux · MIT · 100% local, exceto a reescrita por IA na nuvem (opcional).",
+                               "group-footer"), False, False, 0)
+        return root
 
-        grid.attach(lbl_prompt, 0, 2, 1, 1)
-        grid.attach(scroll, 1, 2, 1, 1)
+    def page_appearance(self):
+        root, box = t.page("Aparência", "Como o Whisper aparece enquanto você dita.")
+        self.preview = VisualPreview(self.config)
+        frame = Gtk.Box()
+        frame.pack_start(self.preview, True, True, 0)
+        box.pack_start(frame, False, False, 0)
 
-        lbl_tip = Gtk.Label()
-        lbl_tip.set_markup("<span size='small' foreground='#FFFFFF60'><i>Dica: O Prompt ajuda o Whisper a transcrever jargões técnicos, nomes de empresas e abreviações corretamente. Separe por vírgulas.</i></span>")
-        lbl_tip.set_line_wrap(True)
-        lbl_tip.set_max_width_chars(50)
-        lbl_tip.set_halign(Gtk.Align.START)
-        grid.attach(lbl_tip, 1, 3, 1, 1)
+        def apply(key, value):
+            self.set(key, value)
+            self.preview.rebuild()
+            if key in ("accent", "accent_custom"):
+                t.apply_theme(self.get_screen(), self.config)
 
-        self.combo_model.set_hexpand(True)
-        self.combo_lang.set_hexpand(True)
-        scroll.set_hexpand(True)
-        scroll.set_vexpand(True)
+        lb = t.group(box, "Visual")
+        t.row(lb, "Estilo", None, t.segmented(list(VISUAL_LABELS.items()), self.config.get("overlay_style", "orb"),
+                                              lambda v: apply("overlay_style", v)))
 
-        return grid
+        def accent(key, custom):
+            if custom:
+                self.config["accent_custom"] = custom
+            apply("accent", key)
+        t.row(lb, "Cor de destaque", None, t.accent_picker(self.config.get("accent", "indigo"), accent,
+                                                           self.config.get("accent_custom")))
+        t.row(lb, "Tamanho", None, t.segmented([("s", "Pequeno"), ("m", "Médio"), ("l", "Grande")],
+                                               self.config.get("overlay_size", "m"),
+                                               lambda v: apply("overlay_size", v)))
+        t.row(lb, "Posição", "Onde o overlay aparece no monitor do mouse.",
+              t.segmented([("bottom", "Embaixo"), ("center", "Centro"), ("top", "Topo")],
+                          self.config.get("overlay_position", "bottom"), lambda v: apply("overlay_position", v)))
 
-    def create_audio_page(self):
-        grid = Gtk.Grid()
-        grid.set_column_spacing(15)
-        grid.set_row_spacing(12)
-        grid.set_margin_top(15)
-        grid.set_margin_bottom(15)
-        grid.set_margin_start(15)
-        grid.set_margin_end(15)
+        lb = t.group(box, "Detalhes")
+        t.slider_row(lb, "Brilho", "Intensidade do halo do orbe e das ondas.", 0, 1, 0.05,
+                     self.config.get("overlay_glow", 0.8), lambda v: f"{int(round(v * 100))}%",
+                     lambda v: apply("overlay_glow", round(v, 2)))
+        t.switch_row(lb, "Mostrar texto", "A transcrição aparece junto do visual enquanto você fala.",
+                     self.config.get("overlay_show_text", True), lambda v: apply("overlay_show_text", v))
+        t.switch_row(lb, "Reduzir movimento", "Sem rotação nem pulsação; só reage ao volume.",
+                     self.config.get("reduce_motion"), lambda v: apply("reduce_motion", v))
+        return root
 
-        # Microfone
-        lbl_mic = Gtk.Label(label="Microfone:")
-        lbl_mic.set_halign(Gtk.Align.START)
-        self.combo_mic = Gtk.ComboBoxText()
+    def page_microphone(self):
+        root, box = t.page("Microfone", "Entrada de áudio e calibração.")
+        lb = t.group(box, "Entrada",
+                     "Se o microfone escolhido estiver desconectado, o ditado usa o padrão do sistema e avisa.")
+        options = [("@DEFAULT_SOURCE@", "Padrão do sistema")] + [(n, friendly_mic_name(n)) for n in list_source_names()]
+        self.mic_combo = t.choice_row(lb, "Microfone", None, options,
+                                      self.config.get("mic_device", "@DEFAULT_SOURCE@"), self._on_mic_changed)
+        self.meter = LevelMeter(self._selected_mic, self.config.get("sample_rate", 16000))
+        t.row(lb, "Nível", "Fale para ver o sinal chegando.", self.meter)
 
-        mics = list_mic_devices()
-        for mic_val, mic_label in mics:
-            self.combo_mic.append(mic_val, mic_label)
+        lb = t.group(box, "Calibração", "Cada microfone guarda a própria calibração. Sem calibração, o ditado mede o "
+                                        "ruído a cada uso.")
+        self.cal_label = t.label("", "row-subtitle")
+        btn = Gtk.Button(label="Calibrar…")
+        btn.get_style_context().add_class("btn-primary")
+        btn.connect("clicked", self._open_calibration)
+        cal_box = Gtk.Box(spacing=12)
+        cal_box.pack_start(self.cal_label, False, False, 0)
+        cal_box.pack_start(btn, False, False, 0)
+        t.row(lb, "Estado", None, cal_box)
+        self._refresh_cal()
 
-        current_mic = self.config.get("mic_device", "@DEFAULT_SOURCE@")
-        found = False
-        for mic_val, _ in mics:
-            if mic_val == current_mic:
-                found = True
-                break
-        if not found:
-            self.combo_mic.append(current_mic, current_mic)
-        self.combo_mic.set_active_id(current_mic)
-
-        grid.attach(lbl_mic, 0, 0, 1, 1)
-        grid.attach(self.combo_mic, 1, 0, 1, 1)
-        self.combo_mic.set_hexpand(True)
-
-        # Silence Threshold
-        lbl_thresh = Gtk.Label(label="Limite Manual:")
-        lbl_thresh.set_halign(Gtk.Align.START)
-
-        self.adj_thresh = Gtk.Adjustment(value=self.config.get("silence_threshold", 0)*1000, lower=0, upper=15, step_increment=0.1, page_increment=1)
-        self.scale_thresh = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adj_thresh)
-        # 1 casa (0.0001): limiares de mic dinâmico (~0.0004) não podem virar "Auto" ao salvar.
-        self.scale_thresh.set_digits(1)
-        self.scale_thresh.set_hexpand(True)
-
-        self.lbl_thresh_val = Gtk.Label()
-        self.update_thresh_label()
-        self.scale_thresh.connect("value-changed", lambda w: self.update_thresh_label())
-
-        grid.attach(lbl_thresh, 0, 1, 1, 1)
-        grid.attach(self.scale_thresh, 1, 1, 1, 1)
-        grid.attach(self.lbl_thresh_val, 2, 1, 1, 1)
-
-        # Silence Duration
-        lbl_dur = Gtk.Label(label="Aguardar Silêncio:")
-        lbl_dur.set_halign(Gtk.Align.START)
-
-        self.adj_dur = Gtk.Adjustment(value=self.config.get("silence_duration", 1.7), lower=0.5, upper=5.0, step_increment=0.1, page_increment=0.5)
-        self.scale_dur = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adj_dur)
-        self.scale_dur.set_digits(1)
-        self.scale_dur.set_hexpand(True)
-
-        self.lbl_dur_val = Gtk.Label()
-        self.update_dur_label()
-        self.scale_dur.connect("value-changed", lambda w: self.update_dur_label())
-
-        grid.attach(lbl_dur, 0, 2, 1, 1)
-        grid.attach(self.scale_dur, 1, 2, 1, 1)
-        grid.attach(self.lbl_dur_val, 2, 2, 1, 1)
-
-        # Supressão de Ruído
-        lbl_noise = Gtk.Label(label="Supressão de Ruído:")
-        lbl_noise.set_halign(Gtk.Align.START)
-        self.switch_noise = Gtk.Switch()
-        self.switch_noise.set_active(self.config.get("noise_suppression", True))
-        self.switch_noise.set_halign(Gtk.Align.START)
-
-        grid.attach(lbl_noise, 0, 3, 1, 1)
-        grid.attach(self.switch_noise, 1, 3, 1, 1)
-
-        # Ducking
-        lbl_duck = Gtk.Label(label="Atenuação de Áudio:")
-        lbl_duck.set_halign(Gtk.Align.START)
-        self.switch_duck = Gtk.Switch()
-        self.switch_duck.set_active(self.config.get("audio_ducking", True))
-        self.switch_duck.set_halign(Gtk.Align.START)
-
-        grid.attach(lbl_duck, 0, 4, 1, 1)
-        grid.attach(self.switch_duck, 1, 4, 1, 1)
-
-        # Ducking Volume
-        lbl_duck_vol = Gtk.Label(label="Volume Atenuado:")
-        lbl_duck_vol.set_halign(Gtk.Align.START)
-
-        self.adj_duck_vol = Gtk.Adjustment(value=self.config.get("ducking_volume", 0.20)*100, lower=0, upper=100, step_increment=5, page_increment=10)
-        self.scale_duck_vol = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=self.adj_duck_vol)
-        self.scale_duck_vol.set_digits(0)
-        self.scale_duck_vol.set_hexpand(True)
-
-        self.lbl_duck_vol_val = Gtk.Label()
-        self.update_duck_vol_label()
-        self.scale_duck_vol.connect("value-changed", lambda w: self.update_duck_vol_label())
-
-        self.switch_duck.connect("notify::active", self.on_duck_switch_changed)
-        self.scale_duck_vol.set_sensitive(self.switch_duck.get_active())
-
-        grid.attach(lbl_duck_vol, 0, 5, 1, 1)
-        grid.attach(self.scale_duck_vol, 1, 5, 1, 1)
-        grid.attach(self.lbl_duck_vol_val, 2, 5, 1, 1)
-
-        grid.insert_row(1)
-        lbl_cal = Gtk.Label(label="Calibração:")
-        lbl_cal.set_halign(Gtk.Align.START)
-        cal_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        self.lbl_cal_state = Gtk.Label(xalign=0)
-        cal_box.pack_start(self.lbl_cal_state, True, True, 0)
-        btn_cal = Gtk.Button(label="Calibrar…")
-        btn_cal.connect("clicked", self.on_calibrate_clicked)
-        cal_box.pack_end(btn_cal, False, False, 0)
-        grid.attach(lbl_cal, 0, 1, 1, 1)
-        grid.attach(cal_box, 1, 1, 2, 1)
-        self.combo_mic.connect("changed", lambda c: self.refresh_cal_state())
-        self.refresh_cal_state()
-
-        return grid
+        lb = t.group(box, "Processamento")
+        t.switch_row(lb, "Supressão de ruído", "Isola a voz com RNNoise antes de transcrever.",
+                     self.config.get("noise_suppression", True), lambda v: self.set("noise_suppression", v))
+        t.switch_row(lb, "Abaixar o som ao ditar", "Reduz o volume do sistema enquanto você fala.",
+                     self.config.get("audio_ducking", True), lambda v: self.set("audio_ducking", v))
+        t.slider_row(lb, "Volume durante o ditado", None, 0, 1, 0.05, self.config.get("ducking_volume", 0.2),
+                     lambda v: f"{int(round(v * 100))}%", lambda v: self.set("ducking_volume", round(v, 2)))
+        return root
 
     def _selected_mic(self):
-        mic = self.combo_mic.get_active_id() or "@DEFAULT_SOURCE@"
+        mic = self.config.get("mic_device", "@DEFAULT_SOURCE@")
         return (default_source_name() or mic) if mic == "@DEFAULT_SOURCE@" else mic
 
-    def refresh_cal_state(self):
+    def _on_mic_changed(self, mic):
+        self.set("mic_device", mic)
+        self.meter.restart()
+        self._refresh_cal()
+
+    def _refresh_cal(self):
         state, cal = calibration_state(self.config, self._selected_mic())
-        if state == "ok":
-            txt, color = f"Calibrado · limiar {cal['threshold']:.4f}", "#64FFA0"
-        elif state == "stale":
-            txt, color = "Ganho do mic mudou: recalibre", "#FFC83C"
-        else:
-            txt, color = "Automático (não calibrado)", "#FFFFFF80"
-        self.lbl_cal_state.set_markup(f"<span size='small' foreground='{color}'>{GLib.markup_escape_text(txt)}</span>")
+        text, color = {
+            "ok": (f"Calibrado · limiar {cal['threshold']:.4f}" if cal else "", t.SUCCESS),
+            "stale": ("Ganho do mic mudou: recalibre", t.WARNING),
+            "none": ("Automático", "#98989D"),
+        }[state]
+        self.cal_label.set_markup(f"<span foreground='{color}'>{GLib.markup_escape_text(text)}</span>")
 
-    def on_calibration_saved(self):
-        # Calibrar zera o limite manual; o slider precisa refletir, senão Salvar o restaura.
-        self.adj_thresh.set_value(self.config.get("silence_threshold", 0) * 1000)
-        self.refresh_cal_state()
-
-    def on_calibrate_clicked(self, btn):
-        win = CalibrationWindow(self.config, mic=self._selected_mic(), on_saved=self.on_calibration_saved)
+    def _open_calibration(self, _b):
+        def saved():
+            self._refresh_cal()
+        win = CalibrationWindow(self.config, mic=self._selected_mic(), on_saved=saved)
         win.set_transient_for(self)
         win.set_modal(True)
+        self.meter.stop()  # libera o mic para a janela de calibração
+        win.connect("destroy", lambda *_: self.meter.restart())
         win.show_all()
 
-    def update_thresh_label(self):
-        val = self.scale_thresh.get_value()
-        if val == 0:
-            self.lbl_thresh_val.set_markup("<span foreground='#64DCFF' weight='bold'>Auto</span>")
-        else:
-            self.lbl_thresh_val.set_text(f"{val/1000:.4f}")
+    def page_recognition(self):
+        root, box = t.page("Reconhecimento", "Modelo Whisper e quando encerrar a gravação.")
+        self.restart_box = Gtk.Box(spacing=12)
+        self.restart_box.get_style_context().add_class("callout")
+        self.restart_box.pack_start(t.label("Reinicie o serviço para aplicar a mudança de modelo, idioma ou prompt.",
+                                            wrap=True), True, True, 0)
+        rb = Gtk.Button(label="Reiniciar agora")
+        rb.get_style_context().add_class("btn-primary")
+        rb.connect("clicked", self._restart_daemon)
+        self.restart_box.pack_start(rb, False, False, 0)
+        self.restart_box.set_no_show_all(True)
+        box.pack_start(self.restart_box, False, False, 0)
 
-    def update_dur_label(self):
-        val = self.scale_dur.get_value()
-        self.lbl_dur_val.set_text(f"{val:.1f}s")
+        lb = t.group(box, "Modelo", "Modelos maiores erram menos e usam mais GPU. turbo é o melhor custo-benefício.")
+        models = [("tiny", "tiny"), ("base", "base"), ("small", "small"), ("medium", "medium"),
+                  ("turbo", "large-v3-turbo"), ("large-v3", "large-v3")]
+        t.choice_row(lb, "Modelo Whisper", None, models, self.config.get("model", "medium"),
+                     lambda v: self.set("model", v))
 
-    def update_duck_vol_label(self):
-        val = self.scale_duck_vol.get_value()
-        self.lbl_duck_vol_val.set_text(f"{int(val)}%")
+        lb = t.group(box, "Vocabulário", "Nomes, siglas e jargões que o Whisper deve reconhecer, separados por vírgula.")
+        r = Gtk.ListBoxRow()
+        r.set_activatable(False)
+        buf = Gtk.TextBuffer(text=self.config.get("initial_prompt", ""))
+        tv = Gtk.TextView(buffer=buf)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD)
+        tv.set_size_request(-1, 90)
+        buf.connect("changed", lambda b: self.set("initial_prompt", b.get_text(b.get_start_iter(),
+                                                                                 b.get_end_iter(), True).strip()))
+        r.add(tv)
+        lb.add(r)
 
-    def on_duck_switch_changed(self, switch, gparamspec):
-        self.scale_duck_vol.set_sensitive(switch.get_active())
+        lb = t.group(box, "Gravação")
+        t.slider_row(lb, "Pausa para encerrar", "Silêncio contínuo que conclui o ditado.", 0.5, 5, 0.1,
+                     self.config.get("silence_duration", 1.7), lambda v: f"{v:.1f} s",
+                     lambda v: self.set("silence_duration", round(v, 1)))
+        t.slider_row(lb, "Esperar fala por", "Tempo máximo até você começar a falar.", 5, 60, 1,
+                     self.config.get("listen_timeout", 15), lambda v: f"{int(v)} s",
+                     lambda v: self.set("listen_timeout", int(v)))
+        t.slider_row(lb, "Duração máxima", None, 15, 300, 5, self.config.get("max_duration", 60),
+                     lambda v: f"{int(v)} s", lambda v: self.set("max_duration", int(v)))
+        return root
 
-    def create_formatting_page(self):
-        grid = Gtk.Grid()
-        grid.set_column_spacing(15)
-        grid.set_row_spacing(15)
-        grid.set_margin_top(15)
-        grid.set_margin_bottom(15)
-        grid.set_margin_start(15)
-        grid.set_margin_end(15)
+    def _show_restart_callout(self):
+        if is_daemon_running() and hasattr(self, "restart_box"):
+            self.restart_box.show_all()
 
-        # Formatação
-        lbl_fmt = Gtk.Label(label="Formatação Inteligente:")
-        lbl_fmt.set_halign(Gtk.Align.START)
-        self.switch_fmt = Gtk.Switch()
-        self.switch_fmt.set_active(self.config.get("enable_formatting", True))
-        self.switch_fmt.set_halign(Gtk.Align.START)
+    def _restart_daemon(self, btn):
+        self._flush()
+        btn.set_sensitive(False)
+        btn.set_label("Reiniciando…")
 
-        lbl_fmt_desc = Gtk.Label()
-        lbl_fmt_desc.set_markup("<span size='small' foreground='#FFFFFF60'>Ajusta automaticamente letras maiúsculas e pontuação do texto transcrito.</span>")
-        lbl_fmt_desc.set_line_wrap(True)
-        lbl_fmt_desc.set_halign(Gtk.Align.START)
+        def work():
+            r = subprocess.run(["systemctl", "--user", "restart", "dictate-daemon"], capture_output=True, timeout=20)
+            GLib.idle_add(done, r.returncode == 0)
 
-        grid.attach(lbl_fmt, 0, 0, 1, 1)
-        grid.attach(self.switch_fmt, 1, 0, 1, 1)
-        grid.attach(lbl_fmt_desc, 1, 1, 1, 1)
+        def done(ok):
+            btn.set_sensitive(True)
+            btn.set_label("Reiniciar agora")
+            if ok:
+                self.restart_box.hide()
+            else:
+                self._error("Não foi possível reiniciar o serviço", "Veja: systemctl --user status dictate-daemon")
+        threading.Thread(target=work, daemon=True).start()
 
-        # Fillers
-        lbl_fillers = Gtk.Label(label="Remover Hesitações:")
-        lbl_fillers.set_halign(Gtk.Align.START)
-        self.switch_fillers = Gtk.Switch()
-        self.switch_fillers.set_active(self.config.get("remove_fillers", True))
-        self.switch_fillers.set_halign(Gtk.Align.START)
+    def page_text(self):
+        root, box = t.page("Texto", "Pontuação, correções e atalhos de texto.")
+        lb = t.group(box, "Formatação")
+        t.switch_row(lb, "Formatação automática", "Maiúsculas, espaços e ponto final.",
+                     self.config.get("enable_formatting", True), lambda v: self.set("enable_formatting", v))
+        t.switch_row(lb, "Remover hesitações", "“hmm”, “ahn”, “éh”…",
+                     self.config.get("remove_fillers", True), lambda v: self.set("remove_fillers", v))
+        t.switch_row(lb, "Comandos de voz", "“vírgula”, “ponto final”, “nova linha”, “novo parágrafo”…",
+                     self.config.get("voice_commands", True), lambda v: self.set("voice_commands", v))
+        self._kv_editor(box, "Dicionário", "Corrige grafias recorrentes: o que o Whisper escreve → como deve ficar.",
+                        "word_overrides", "escrito", "corrigido")
+        self._kv_editor(box, "Atalhos de texto", "Diga o gatilho e o texto inteiro entra no lugar. Ex.: “minha assinatura”.",
+                        "snippets", "gatilho falado", "texto", multiline=True)
+        return root
 
-        lbl_fillers_desc = Gtk.Label()
-        lbl_fillers_desc.set_markup("<span size='small' foreground='#FFFFFF60'>Remove marcadores de hesitação como 'humm', 'er', 'ahn', 'eh'.</span>")
-        lbl_fillers_desc.set_line_wrap(True)
-        lbl_fillers_desc.set_halign(Gtk.Align.START)
+    def page_ai(self):
+        root, box = t.page("Inteligência", "Reescreve o ditado com um modelo de linguagem antes de colar.")
+        content = self._feature_gate(box, "ai_enabled", "Reescrita com IA",
+                                     "Corrigir, transformar em e-mail, traduzir, resumir em tópicos.")
 
-        grid.attach(lbl_fillers, 0, 2, 1, 1)
-        grid.attach(self.switch_fillers, 1, 2, 1, 1)
-        grid.attach(lbl_fillers_desc, 1, 3, 1, 1)
+        lb = t.group(content, "Provedor")
+        provider_rows = {}
+        t.row(lb, "Serviço", None, t.segmented([("nvidia", "NVIDIA NIM"), ("ollama", "Ollama (local)")],
+                                               self.config.get("ai_provider", "nvidia"),
+                                               lambda v: (self.set("ai_provider", v), self._ai_provider_rows(provider_rows))))
+        from .. import secrets
+        key_label = t.label(secrets.masked(secrets.get_key("nvidia")), "dim")
+        kb = Gtk.Box(spacing=10)
+        kb.pack_start(key_label, False, False, 0)
+        change = Gtk.Button(label="Alterar…")
 
-        # Comandos de Voz
-        lbl_cmds = Gtk.Label(label="Comandos de Voz:")
-        lbl_cmds.set_halign(Gtk.Align.START)
-        self.switch_cmds = Gtk.Switch()
-        self.switch_cmds.set_active(self.config.get("voice_commands", True))
-        self.switch_cmds.set_halign(Gtk.Align.START)
+        def change_key(_b):
+            def build(b):
+                b.pack_start(t.label("Chave de API da NVIDIA (nvapi-…). Fica no chaveiro do sistema.", wrap=True),
+                             False, False, 0)
+                e = Gtk.Entry(visibility=False, placeholder_text="nvapi-…")
+                b.pack_start(e, False, False, 0)
+                return e.get_text
+            key = self._dialog("Chave da NVIDIA", build)
+            if key:
+                secrets.set_key("nvidia", key)
+                key_label.set_text(secrets.masked(key))
+        change.connect("clicked", change_key)
+        kb.pack_start(change, False, False, 0)
+        provider_rows["nvidia_key"] = t.row(lb, "Chave de API", "Guardada no chaveiro do sistema (gnome-keyring).", kb)
+        self.ai_model_combo = t.PopupChoice()
+        self.ai_model_combo.append(self.config.get("ai_model"), self.config.get("ai_model"))
+        self.ai_model_combo.set_active_id(self.config.get("ai_model"))
+        self.ai_model_combo.connect("changed", lambda c: c.get_active_id() and self.set("ai_model", c.get_active_id()))
+        provider_rows["nvidia_model"] = t.row(lb, "Modelo", "Modelos rápidos deixam o ditado mais fluido.",
+                                              self.ai_model_combo)
+        self._load_models_async()
+        provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
+            "ai_ollama_url", "http://localhost:11434"))
+        provider_rows["ollama_model"] = t.row(lb, "Modelo do Ollama", None, self._entry("ai_ollama_model", "llama3.2"))
+        test_label = t.label("", "row-subtitle")
+        tb = Gtk.Box(spacing=10)
+        tb.pack_start(test_label, False, False, 0)
+        test = Gtk.Button(label="Testar")
+        test.connect("clicked", lambda _b: self._test_ai(test_label))
+        tb.pack_start(test, False, False, 0)
+        t.row(lb, "Conexão", None, tb)
+        GLib.idle_add(self._ai_provider_rows, provider_rows)
 
-        lbl_cmds_desc = Gtk.Label()
-        lbl_cmds_desc.set_markup("<span size='small' foreground='#FFFFFF60'>Substitui termos falados como 'ponto final', 'nova linha' pelas respectivas pontuações.</span>")
-        lbl_cmds_desc.set_line_wrap(True)
-        lbl_cmds_desc.set_halign(Gtk.Align.START)
+        lb = t.group(content, "Modos", "Use um modo dizendo “modo e-mail, …” no começo do ditado, por atalho "
+                                       "próprio ou como padrão de um aplicativo.")
+        for mode in self.config.get("ai_modes", []):
+            self._mode_row(lb, mode)
+        opts = [("", "Nenhum (só quando pedir)")] + [(m["id"], m["name"]) for m in self.config.get("ai_modes", [])]
+        lb2 = t.group(content, "Uso")
+        t.choice_row(lb2, "Modo padrão", "Aplicado em todo ditado, exceto quando um app define outro.",
+                     opts, self.config.get("ai_default_mode", ""), lambda v: self.set("ai_default_mode", v))
+        t.switch_row(lb2, "Ativar por voz", "Diga “modo <nome>” no começo: “modo e-mail, preciso remarcar…”.",
+                     self.config.get("ai_voice_prefix", True), lambda v: self.set("ai_voice_prefix", v))
+        content.pack_start(t.label("Privacidade: com a NVIDIA NIM o texto ditado vai para a nuvem da NVIDIA. "
+                                   "Com o Ollama tudo fica no seu computador. Se a IA falhar ou demorar, "
+                                   "o texto original é colado.", "group-footer", wrap=True), False, False, 0)
+        return root
 
-        grid.attach(lbl_cmds, 0, 4, 1, 1)
-        grid.attach(self.switch_cmds, 1, 4, 1, 1)
-        grid.attach(lbl_cmds_desc, 1, 5, 1, 1)
+    def _entry(self, key, placeholder):
+        e = Gtk.Entry(text=self.config.get(key) or "", placeholder_text=placeholder)
+        e.set_width_chars(26)
+        e.connect("changed", lambda w: self.set(key, w.get_text().strip()))
+        return e
 
-        return grid
+    def _ai_provider_rows(self, rows):
+        ollama = self.config.get("ai_provider") == "ollama"
+        for name, r in rows.items():
+            r.set_visible(name.startswith("ollama") == ollama)
+        return False
 
-    def create_overrides_page(self):
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        vbox.set_margin_top(15)
-        vbox.set_margin_bottom(15)
-        vbox.set_margin_start(15)
-        vbox.set_margin_end(15)
+    def _load_models_async(self):
+        def work():
+            try:
+                from .. import ai
+                models = ai.list_models(self.config)
+            except Exception as e:
+                _debug_log(f"IA: lista de modelos falhou: {e}")
+                models = []
+            GLib.idle_add(fill, models)
 
-        lbl_title = Gtk.Label()
-        lbl_title.set_markup("<b>Substituições de Palavras (Word Overrides)</b>")
-        lbl_title.set_halign(Gtk.Align.START)
-        vbox.pack_start(lbl_title, False, False, 0)
+        def fill(models):
+            current = self.config.get("ai_model")
+            for m in models:
+                if m != current:
+                    self.ai_model_combo.append(m, m)
+        threading.Thread(target=work, daemon=True).start()
 
-        lbl_desc = Gtk.Label()
-        lbl_desc.set_markup("<span size='small' foreground='#FFFFFF60'>Defina termos falados (em minúsculo) e sua respectiva substituição textual.</span>")
-        lbl_desc.set_line_wrap(True)
-        lbl_desc.set_halign(Gtk.Align.START)
-        vbox.pack_start(lbl_desc, False, False, 0)
+    def _test_ai(self, label):
+        label.set_text("Testando…")
 
-        self.overrides_store = Gtk.ListStore(str, str)
-        word_overrides = self.config.get("word_overrides", {})
-        for wrong, right in word_overrides.items():
-            self.overrides_store.append([wrong, right])
+        def work():
+            try:
+                from .. import ai
+                ms, sample = ai.test(self.config)
+                msg, color = f"OK · {ms:.0f} ms", t.SUCCESS
+            except Exception as e:
+                msg, color = f"Falhou: {str(e)[:60]}", t.DANGER
+            GLib.idle_add(lambda: label.set_markup(
+                f"<span foreground='{color}'>{GLib.markup_escape_text(msg)}</span>") or False)
+        threading.Thread(target=work, daemon=True).start()
 
-        self.tree_view = Gtk.TreeView(model=self.overrides_store)
-        self.tree_view.set_hexpand(True)
-        self.tree_view.set_vexpand(True)
+    def _mode_row(self, lb, mode):
+        sw = Gtk.Switch()
+        sw.set_valign(Gtk.Align.CENTER)
+        sw.set_active(mode.get("enabled", True))
+        edit = Gtk.Button(label="Editar")
+        box = Gtk.Box(spacing=10)
+        box.pack_start(edit, False, False, 0)
+        box.pack_start(sw, False, False, 0)
+        row = t.row(lb, mode["name"], f"dictate --mode {mode['id']}", box)
 
-        renderer_text1 = Gtk.CellRendererText()
-        renderer_text1.set_property("editable", True)
-        renderer_text1.connect("edited", self.on_cell_edited, 0)
-        col_wrong = Gtk.TreeViewColumn("Falado (Minúsculo)", renderer_text1, text=0)
-        col_wrong.set_resizable(True)
-        col_wrong.set_expand(True)
-        self.tree_view.append_column(col_wrong)
+        def save_modes():
+            self.set("ai_modes", copy.deepcopy(self.config["ai_modes"]))
 
-        renderer_text2 = Gtk.CellRendererText()
-        renderer_text2.set_property("editable", True)
-        renderer_text2.connect("edited", self.on_cell_edited, 1)
-        col_right = Gtk.TreeViewColumn("Escrever como", renderer_text2, text=1)
-        col_right.set_resizable(True)
-        col_right.set_expand(True)
-        self.tree_view.append_column(col_right)
+        def toggle(s, _p):
+            mode["enabled"] = s.get_active()
+            save_modes()
+        sw.connect("notify::active", toggle)
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_shadow_type(Gtk.ShadowType.IN)
-        scroll.add(self.tree_view)
-        vbox.pack_start(scroll, True, True, 0)
+        def do_edit(_b):
+            def build(b):
+                name = Gtk.Entry(text=mode["name"])
+                b.pack_start(t.label("Nome"), False, False, 0)
+                b.pack_start(name, False, False, 0)
+                b.pack_start(t.label("Instrução para a IA"), False, False, 0)
+                buf = Gtk.TextBuffer(text=mode["prompt"])
+                tv = Gtk.TextView(buffer=buf)
+                tv.set_wrap_mode(Gtk.WrapMode.WORD)
+                tv.set_size_request(420, 120)
+                b.pack_start(tv, True, True, 0)
+                return lambda: (name.get_text().strip(), buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True))
+            res = self._dialog(f"Modo {mode['name']}", build)
+            if res and res[0]:
+                mode["name"], mode["prompt"] = res
+                row.get_child().get_children()[0].get_children()[0].set_text(mode["name"])
+                save_modes()
+        edit.connect("clicked", do_edit)
 
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    def page_apps(self):
+        root, box = t.page("Aplicativos", "Regras por aplicativo: como colar e formatar em cada janela.")
+        content = self._feature_gate(box, "profiles_enabled", "Perfis por aplicativo",
+                                     "Terminais colam com Ctrl+Shift+V e sem ponto final; e-mail usa pontuação "
+                                     "completa…")
+        lb = t.group(content, "Perfis", "O primeiro perfil cuja regra combina com a classe da janela ativa é usado. "
+                                        "Use | para várias classes (ex.: kitty|guake).")
+        self.profiles_lb = lb
+        for p in self.config.get("profiles", []):
+            self._profile_row(lb, p)
+        add = Gtk.Button(label="Adicionar perfil…")
+        add.set_halign(Gtk.Align.START)
+        add.connect("clicked", lambda _b: self._edit_profile(None))
+        content.pack_start(add, False, False, 0)
+        return root
 
-        btn_add = Gtk.Button(label="Adicionar")
-        btn_add.connect("clicked", self.on_add_override_clicked)
-        btn_box.pack_start(btn_add, False, False, 0)
+    def _profile_summary(self, p):
+        bits = [p["match"], {"ctrl+v": "Ctrl+V", "ctrl+shift+v": "Ctrl+Shift+V", "type": "digitar"}[p["paste"]]]
+        if not p.get("formatting", True):
+            bits.append("sem formatação")
+        elif not p.get("final_period", True):
+            bits.append("sem ponto final")
+        if p.get("ai_mode"):
+            bits.append(f"IA: {p['ai_mode']}")
+        return " · ".join(bits)
 
-        btn_remove = Gtk.Button(label="Remover")
-        btn_remove.connect("clicked", self.on_remove_override_clicked)
-        btn_box.pack_start(btn_remove, False, False, 0)
+    def _profile_row(self, lb, p):
+        edit = Gtk.Button(label="Editar")
+        edit.connect("clicked", lambda _b: self._edit_profile(p))
+        r = t.row(lb, p["name"], self._profile_summary(p), edit)
+        r.profile = p
+        r.show_all()
 
-        vbox.pack_start(btn_box, False, False, 0)
+    def _rebuild_profiles(self):
+        for r in self.profiles_lb.get_children():
+            self.profiles_lb.remove(r)
+        for p in self.config["profiles"]:
+            self._profile_row(self.profiles_lb, p)
 
-        return vbox
+    def _edit_profile(self, profile):
+        p = dict(profile or {"match": "", "name": "", "paste": "ctrl+v", "formatting": True,
+                             "final_period": True, "capitalize": True, "ai_mode": ""})
 
-    def on_cell_edited(self, renderer, path, new_text, col_idx):
-        if not new_text.strip():
+        def build(b):
+            fields = {}
+            for key, lbl, ph in (("name", "Nome", "Ex.: Terminais"),
+                                 ("match", "Classe da janela", "Ex.: kitty|guake")):
+                b.pack_start(t.label(lbl), False, False, 0)
+                fields[key] = Gtk.Entry(text=p[key], placeholder_text=ph)
+                b.pack_start(fields[key], False, False, 0)
+            b.pack_start(t.label("Descubra a classe com: xdotool getactivewindow getwindowclassname",
+                                 "row-subtitle", wrap=True), False, False, 0)
+            lb = t.group(b)
+            paste = t.choice_row(lb, "Colar com", None, [("ctrl+v", "Ctrl+V"), ("ctrl+shift+v", "Ctrl+Shift+V"),
+                                                          ("type", "Digitar o texto")], p["paste"], lambda v: None)
+            switches = {k: t.switch_row(lb, lbl, None, p.get(k, True), lambda v: None)
+                        for k, lbl in (("formatting", "Formatação"), ("final_period", "Ponto final"),
+                                       ("capitalize", "Maiúscula inicial"))}
+            modes = [("", "Nenhum")] + [(m["id"], m["name"]) for m in self.config.get("ai_modes", [])]
+            ai = t.choice_row(lb, "Modo de IA", None, modes, p.get("ai_mode", ""), lambda v: None)
+            if profile is not None:
+                rm = Gtk.Button(label="Remover perfil")
+                rm.get_style_context().add_class("btn-danger")
+                rm.set_halign(Gtk.Align.START)
+
+                def remove(_b):
+                    self.config["profiles"].remove(profile)
+                    self.set("profiles", copy.deepcopy(self.config["profiles"]))
+                    self._rebuild_profiles()
+                    b.get_toplevel().response(Gtk.ResponseType.CANCEL)
+                rm.connect("clicked", remove)
+                b.pack_start(rm, False, False, 0)
+            return lambda: {**p, "name": fields["name"].get_text().strip() or fields["match"].get_text().strip(),
+                            "match": fields["match"].get_text().strip(), "paste": paste.get_active_id(),
+                            "ai_mode": ai.get_active_id() or "",
+                            **{k: s.get_active() for k, s in switches.items()}}
+        res = self._dialog("Perfil de aplicativo", build)
+        if not res or not res["match"]:
             return
-        self.overrides_store[path][col_idx] = new_text.strip()
-        if col_idx == 0:
-            self.overrides_store[path][0] = new_text.strip().lower()
-
-    def on_add_override_clicked(self, btn):
-        self.overrides_store.append(["palavra falada", "Como Escrever"])
-
-    def on_remove_override_clicked(self, btn):
-        selection = self.tree_view.get_selection()
-        model, treeiter = selection.get_selected()
-        if treeiter is not None:
-            model.remove(treeiter)
-
-    def on_cancel_clicked(self, btn):
-        self.close_window()
-
-    def on_save_clicked(self, btn):
-        new_model = self.combo_model.get_active_id()
-        new_lang = self.combo_lang.get_active_id()
-
-        start_iter, end_iter = self.prompt_buffer.get_bounds()
-        new_prompt = self.prompt_buffer.get_text(start_iter, end_iter, True).strip()
-
-        new_mic = self.combo_mic.get_active_id()
-        new_thresh = self.scale_thresh.get_value() / 1000.0
-        new_dur = self.scale_dur.get_value()
-        new_noise = self.switch_noise.get_active()
-        new_duck = self.switch_duck.get_active()
-        new_duck_vol = self.scale_duck_vol.get_value() / 100.0
-
-        new_fmt = self.switch_fmt.get_active()
-        new_fillers = self.switch_fillers.get_active()
-        new_cmds = self.switch_cmds.get_active()
-
-        new_overrides = {}
-        for row in self.overrides_store:
-            wrong, right = row[0], row[1]
-            if wrong.strip() and right.strip():
-                new_overrides[wrong.strip().lower()] = right.strip()
-
-        updated_config = {
-            **self.config,
-            "model": new_model,
-            "language": new_lang,
-            "sample_rate": self.config.get("sample_rate", 16000),
-            "mic_device": new_mic,
-            "silence_threshold": new_thresh,
-            "silence_duration": new_dur,
-            "listen_timeout": self.config.get("listen_timeout", 15),
-            "max_duration": self.config.get("max_duration", 60),
-            "gpu_min_vram_mb": self.config.get("gpu_min_vram_mb", 2500),
-            "initial_prompt": new_prompt,
-            "no_speech_threshold": self.config.get("no_speech_threshold", 0.6),
-            "log_prob_threshold": self.config.get("log_prob_threshold", -1.0),
-            "compression_ratio_threshold": self.config.get("compression_ratio_threshold", 2.4),
-            "enable_formatting": new_fmt,
-            "remove_fillers": new_fillers,
-            "voice_commands": new_cmds,
-            "audio_ducking": new_duck,
-            "ducking_volume": new_duck_vol,
-            "noise_suppression": new_noise,
-            "word_overrides": new_overrides
-        }
-
-        save_config(updated_config)
-
-        critical_changed = (
-            self.original_config.get("model") != new_model or
-            self.original_config.get("language") != new_lang or
-            self.original_config.get("initial_prompt") != new_prompt
-        )
-
-        if critical_changed and is_daemon_running():
-            self.ask_restart_daemon()
+        profiles = self.config.setdefault("profiles", [])
+        if profile is not None and profile in profiles:
+            profiles[profiles.index(profile)] = res
         else:
-            self.close_window()
+            profiles.append(res)
+        self.set("profiles", copy.deepcopy(profiles))
+        self._rebuild_profiles()
 
-    def ask_restart_daemon(self):
-        dialog = Gtk.MessageDialog(
-            transient_for=self,
-            flags=0,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="Reiniciar Daemon do Whisper?"
-        )
-        dialog.format_secondary_text(
-            "Você alterou configurações críticas de modelo/idioma.\n"
-            "Deseja reiniciar o daemon do Whisper agora para aplicar as mudanças?"
-        )
-        dialog.get_style_context().add_class("settings-dialog")
+    def page_history(self):
+        root, box = t.page("Histórico", "Ditados anteriores, só no seu computador.")
+        content = self._feature_gate(box, "history_enabled", "Guardar histórico",
+                                     "Busque e recole ditados antigos.")
+        lb = t.group(content)
+        t.choice_row(lb, "Manter por", None, [("7", "7 dias"), ("30", "30 dias"), ("90", "90 dias"),
+                                              ("365", "1 ano"), ("0", "Sempre")],
+                     str(self.config.get("history_retention_days", 30)),
+                     lambda v: self.set("history_retention_days", int(v)))
+        self._shortcut_row(lb, "Busca rápida", "Abre uma busca estilo Spotlight; Enter cola.",
+                           "Dictate: histórico", f"{DICTATE_CMD} --history")
 
-        response = dialog.run()
-        dialog.destroy()
+        search = Gtk.SearchEntry(placeholder_text="Buscar no histórico")
+        content.pack_start(search, False, False, 0)
+        self.history_lb = t.group(content)
+        clear = Gtk.Button(label="Apagar histórico…")
+        clear.get_style_context().add_class("btn-danger")
+        clear.set_halign(Gtk.Align.START)
+        content.pack_start(clear, False, False, 0)
 
-        if response == Gtk.ResponseType.YES:
-            self.restart_daemon()
-        else:
-            self.close_window()
+        def refresh(*_):
+            for r in self.history_lb.get_children():
+                self.history_lb.remove(r)
+            items = history.load(query=search.get_text(), limit=60)
+            if not items:
+                t.row(self.history_lb, "Nada por aqui ainda" if not search.get_text() else "Nenhum resultado")
+            for rec in items:
+                copy_btn = Gtk.Button()
+                copy_btn.add(t.icon("copy", 14, "#98989D"))
+                copy_btn.get_style_context().add_class("btn-flat")
+                copy_btn.set_tooltip_text("Copiar")
+                copy_btn.connect("clicked", lambda _b, txt=rec.get("text", ""): Gtk.Clipboard.get(
+                    Gdk.SELECTION_CLIPBOARD).set_text(txt, -1))
+                meta = history.when(rec.get("ts", 0)) + (f" · {rec['app']}" if rec.get("app") else "") + \
+                    (f" · IA: {rec['mode']}" if rec.get("mode") else "")
+                text = rec.get("text", "")
+                t.row(self.history_lb, text if len(text) < 140 else text[:137] + "…", meta, copy_btn)
+            self.history_lb.show_all()
+        search.connect("search-changed", refresh)
+        self.connect("map", refresh)
 
-    def restart_daemon(self):
-        try:
-            subprocess.run(["systemctl", "--user", "restart", "dictate-daemon"], check=True, timeout=5)
-            dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.INFO,
-                buttons=Gtk.ButtonsType.OK,
-                text="Sucesso"
-            )
-            dialog.format_secondary_text("Daemon do Whisper reiniciado com sucesso!")
-            dialog.get_style_context().add_class("settings-dialog")
-            dialog.run()
-            dialog.destroy()
-        except Exception as e:
-            dialog = Gtk.MessageDialog(
-                transient_for=self,
-                flags=0,
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.OK,
-                text="Erro ao reiniciar Daemon"
-            )
-            dialog.format_secondary_text(f"Não foi possível reiniciar o daemon via systemd:\n{e}")
-            dialog.get_style_context().add_class("settings-dialog")
-            dialog.run()
-            dialog.destroy()
+        def do_clear(_b):
+            if self._confirm("Apagar todo o histórico?", "Os ditados guardados serão removidos deste computador.",
+                             "Apagar"):
+                history.clear()
+                refresh()
+        clear.connect("clicked", do_clear)
+        GLib.idle_add(refresh)
+        return root
 
-        self.close_window()
+    def page_handsfree(self):
+        root, box = t.page("Mãos livres", "Outros jeitos de ditar além de tocar no atalho.")
+        lb = t.group(box, "Segurar para falar",
+                     "Com ele ligado, segure o atalho enquanto fala e solte para transcrever. Um toque rápido "
+                     "continua funcionando como antes. Só no X11.")
+        t.switch_row(lb, "Push-to-talk", None, self.config.get("ptt_enabled"), lambda v: self.set("ptt_enabled", v))
+        lb = t.group(box, "Ditado contínuo",
+                     "Depois de colar, volta a ouvir. Cada pausa vira um trecho colado. Para com o atalho, com a "
+                     "frase de parada ou após o tempo sem fala.")
+        t.switch_row(lb, "Mãos livres", None, self.config.get("handsfree_enabled"),
+                     lambda v: self.set("handsfree_enabled", v))
+        t.slider_row(lb, "Encerrar após", "Tempo sem fala que encerra o modo contínuo.", 5, 120, 5,
+                     self.config.get("handsfree_idle_secs", 20), lambda v: f"{int(v)} s",
+                     lambda v: self.set("handsfree_idle_secs", int(v)))
+        t.row(lb, "Frase de parada", None, self._entry("handsfree_stop_phrase", "parar ditado"))
+        return root
 
-    def close_window(self):
+    def page_advanced(self):
+        root, box = t.page("Avançado", "Ajustes finos. Os padrões funcionam para a maioria.")
+        lb = t.group(box, "Detecção de fala", "O limite manual ignora a calibração por microfone. 0 = automático.")
+        t.slider_row(lb, "Limite manual", None, 0, 0.02, 0.0005, self.config.get("silence_threshold", 0),
+                     lambda v: "Auto" if v == 0 else f"{v:.4f}", lambda v: self.set("silence_threshold", round(v, 4)))
+        lb = t.group(box, "Whisper", "Filtros contra alucinações em silêncio e repetições.")
+        t.slider_row(lb, "Sem fala acima de", "no_speech_threshold", 0.1, 1.0, 0.05,
+                     self.config.get("no_speech_threshold", 0.6), lambda v: f"{v:.2f}",
+                     lambda v: self.set("no_speech_threshold", round(v, 2)))
+        t.slider_row(lb, "Log-prob mínimo", "log_prob_threshold", -3.0, 0.0, 0.1,
+                     self.config.get("log_prob_threshold", -1.0), lambda v: f"{v:.1f}",
+                     lambda v: self.set("log_prob_threshold", round(v, 1)))
+        t.slider_row(lb, "Taxa de compressão", "compression_ratio_threshold", 1.5, 4.0, 0.1,
+                     self.config.get("compression_ratio_threshold", 2.4), lambda v: f"{v:.1f}",
+                     lambda v: self.set("compression_ratio_threshold", round(v, 1)))
+        lb = t.group(box, "GPU")
+        t.slider_row(lb, "VRAM livre mínima", "Abaixo disso o modelo roda na CPU.", 500, 8000, 100,
+                     self.config.get("gpu_min_vram_mb", 2500), lambda v: f"{int(v)} MB",
+                     lambda v: self.set("gpu_min_vram_mb", int(v)))
+        lb = t.group(box, "Manutenção")
+        t.button_row(lb, "Logs", "Depuração e erros do ditado.", "Abrir pasta",
+                     lambda: subprocess.Popen(["xdg-open", RUNTIME_DIR]))
+        t.button_row(lb, "Restaurar padrões", "Volta todos os ajustes ao original. Calibrações são mantidas.",
+                     "Restaurar…", self._reset, cls="btn-danger")
+        return root
+
+    def _reset(self):
+        if not self._confirm("Restaurar todos os ajustes?", "As calibrações de microfone são mantidas.", "Restaurar"):
+            return
+        keep = {k: self.config[k] for k in ("mic_calibrations",) if k in self.config}
+        self.config.clear()
+        self.config.update(copy.deepcopy(DEFAULT_CONFIG), **keep)
+        self._flush()
+        page = self.stack.get_visible_child_name()
+        self.disconnect_by_func(self._on_destroy)
         self.destroy()
-        Gtk.main_quit()
+        SettingsWindow(self.config, page).show_all()

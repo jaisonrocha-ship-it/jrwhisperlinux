@@ -18,6 +18,21 @@ from .ui.overlay import WhisperFlowOverlay
 from .ui.visuals import spectrum_bands
 
 
+SOUNDS = {
+    "start": "/usr/share/sounds/freedesktop/stereo/audio-volume-change.oga",
+    "done": "/usr/share/sounds/freedesktop/stereo/complete.oga",
+}
+
+
+def play_sound(config, name):
+    path = SOUNDS[name]
+    if config.get("sounds") and os.path.exists(path):
+        try:
+            subprocess.Popen(["paplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+
+
 class DictateThread(threading.Thread):
     def __init__(self, overlay, config, active_win=None):
         super().__init__(daemon=True)
@@ -29,6 +44,7 @@ class DictateThread(threading.Thread):
         self.recording_active = True
         self.transcriber = None
         self.original_volume = None
+        self.pasted = False
 
     def _run_partial_transcription(self, audio_snapshot, sr):
         try:
@@ -130,6 +146,7 @@ class DictateThread(threading.Thread):
             listen_timeout = self.config.get("listen_timeout", 15)
 
 
+            play_sound(self.config, "start")  # antes do ducking, senão sai baixo demais
             if self.config.get("audio_ducking", True):
                 self.original_volume, _ = get_current_volume()
                 if self.original_volume is not None:
@@ -291,6 +308,7 @@ class DictateThread(threading.Thread):
 
 
                     self._paste_text(final_text, active_win)
+                    self.pasted = True
 
                     GLib.idle_add(self.overlay.update_status, "Texto colado!", "status-success")
                 else:
@@ -326,6 +344,8 @@ class DictateThread(threading.Thread):
             GLib.idle_add(self._cleanup_gtk)
         finally:
             self.restore_volume()
+            if self.pasted:
+                play_sound(self.config, "done")
 
     def restore_volume(self):
         vol, self.original_volume = self.original_volume, None

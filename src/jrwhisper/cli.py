@@ -4,7 +4,8 @@ faster-whisper + CUDA/CPU + GTK3 overlay
 
 USO: 
   dictate                      → Inicia overlay de ditado (Super+Shift+V)
-  dictate --settings / -s      → Abre o painel de configurações premium
+  dictate --settings / -s [aba] → Ajustes (abas: general, appearance, microphone, recognition,
+                                 text, ai, apps, history, handsfree, advanced)
   dictate --daemon             → Inicia o daemon persistente do Whisper
   dictate --status             → Mostra informações e status da ferramenta
   dictate --calibrate          → Mede ruído e voz, diagnostica o mic e salva o limiar
@@ -146,7 +147,8 @@ def main():
     elif arg == "--config":
         print(json.dumps(config, indent=2))
     elif arg in ("--settings", "-s", "--config-panel"):
-        win = SettingsWindow(config)
+        rest = [a for a in sys.argv[1:] if not a.startswith("-")]
+        win = SettingsWindow(config, rest[0] if rest else "general")
         win.show_all()
         Gtk.main()
     elif arg in ("-h", "--help"):

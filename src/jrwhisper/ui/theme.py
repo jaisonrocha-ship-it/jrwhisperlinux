@@ -6,7 +6,7 @@ helpers; o overlay usa só ACCENTS/accent_pair (desenha com Cairo).
 import math
 
 import cairo
-from gi.repository import Gtk, Gdk, GdkPixbuf
+from gi.repository import GObject, Gtk, Gdk, GdkPixbuf
 
 from ..config import load_config
 
@@ -131,7 +131,8 @@ button:disabled {{ opacity: 0.4; }}
 }}
 .btn-primary:hover {{ background-color: shade(@accent, 1.12); }}
 .btn-secondary {{ background-color: @control; border-radius: 999px; padding: 5px 16px; }}
-.btn-danger {{ color: {danger}; }}
+.btn-danger, .btn-danger label {{ color: {danger}; }}
+.popup-choice {{ padding: 3px 8px 3px 12px; min-width: 120px; }}
 .btn-flat {{ background: transparent; color: @accent; padding: 2px 6px; }}
 .btn-flat:hover {{ background: rgba(255, 255, 255, 0.05); }}
 
@@ -198,6 +199,22 @@ scrollbar slider {{ background-color: rgba(255, 255, 255, 0.18); border-radius: 
 .callout {{ background-color: alpha(@accent, 0.10); border-radius: 8px; padding: 10px 12px; }}
 
 messagedialog, messagedialog .dialog-action-area {{ background-color: @card; }}
+
+.segmented {{ background-color: @control; border-radius: 7px; padding: 2px; }}
+.segmented button {{
+    background: transparent;
+    border-radius: 5px;
+    padding: 2px 12px;
+    min-height: 20px;
+    color: @text;
+    font-weight: 500;
+}}
+.segmented button:checked {{ background-color: #636366; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }}
+/* compacto: o tema do sistema infla campos */
+entry {{ min-height: 24px; padding-top: 3px; padding-bottom: 3px; }}
+list.group row switch {{ margin-top: 0; margin-bottom: 0; }}
+.keycap {{ background-color: @control; border-radius: 6px; padding: 3px 10px; font-weight: 600; }}
+.preview {{ background-color: #111114; border-radius: 12px; }}
 """
 
 _provider = None
@@ -239,6 +256,7 @@ ICONS = {
     "clipboard": '<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
     "trash": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
     "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    "chevrons": '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
 }
 
 
@@ -335,20 +353,76 @@ def row(lb, title, subtitle=None, control=None):
 
 def switch_row(lb, title, subtitle, active, on_change):
     sw = Gtk.Switch()
+    sw.set_valign(Gtk.Align.CENTER)
     sw.set_active(bool(active))
     sw.connect("notify::active", lambda s, _p: on_change(s.get_active()))
     row(lb, title, subtitle, sw)
     return sw
 
 
+class PopupChoice(Gtk.Button):
+    """Botão popup do macOS (texto + chevron → menu). API compatível com ComboBoxText.
+
+    O ComboBox nativo herda 44 px de altura do tema do sistema; este segue o nosso CSS.
+    """
+    __gsignals__ = {"changed": (GObject.SignalFlags.RUN_FIRST, None, ())}
+
+    def __init__(self):
+        super().__init__()
+        self.get_style_context().add_class("popup-choice")
+        self._items = []
+        self._active = None
+        box = Gtk.Box(spacing=8)
+        self._label = Gtk.Label(xalign=0)
+        self._label.set_ellipsize(3)  # Pango.EllipsizeMode.END
+        self._label.set_max_width_chars(34)
+        box.pack_start(self._label, True, True, 0)
+        box.pack_end(icon("chevrons", 12, "#98989D"), False, False, 0)
+        self.add(box)
+        self.connect("clicked", self._popup)
+
+    def append(self, oid, olabel):
+        self._items.append((oid, olabel))
+
+    def set_active_id(self, oid):
+        for i, l in self._items:
+            if i == oid:
+                self._active = oid
+                self._label.set_text(l)
+                return True
+        return False
+
+    def set_active(self, index):
+        if 0 <= index < len(self._items):
+            self.set_active_id(self._items[index][0])
+
+    def get_active_id(self):
+        return self._active
+
+    def _popup(self, _b):
+        menu = Gtk.Menu()
+        for oid, olabel in self._items:
+            item = Gtk.MenuItem(label=("✓  " if oid == self._active else "    ") + olabel)
+            item.connect("activate", lambda _i, o=oid: self._choose(o))
+            menu.append(item)
+        menu.show_all()
+        menu.attach_to_widget(self, None)
+        menu.popup_at_widget(self, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
+
+    def _choose(self, oid):
+        if oid != self._active:
+            self.set_active_id(oid)
+            self.emit("changed")
+
+
 def choice_row(lb, title, subtitle, options, active_id, on_change):
-    combo = Gtk.ComboBoxText()
+    combo = PopupChoice()
     for oid, olabel in options:
         combo.append(oid, olabel)
     if active_id not in [o[0] for o in options] and active_id is not None:
         combo.append(active_id, str(active_id))
     combo.set_active_id(active_id)
-    combo.connect("changed", lambda c: c.get_active_id() and on_change(c.get_active_id()))
+    combo.connect("changed", lambda c: c.get_active_id() is not None and on_change(c.get_active_id()))
     row(lb, title, subtitle, combo)
     return combo
 
@@ -390,6 +464,22 @@ def button_row(lb, title, subtitle, button_label, on_click, cls=None):
     b.connect("clicked", lambda _b: on_click())
     row(lb, title, subtitle, b)
     return b
+
+
+def segmented(options, active, on_change):
+    """Controle segmentado do macOS: [(id, rótulo), ...]."""
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+    box.get_style_context().add_class("segmented")
+    first = None
+    for oid, olabel in options:
+        b = Gtk.RadioButton.new_with_label_from_widget(first, olabel)
+        b.set_mode(False)  # aparência de botão, sem bolinha de rádio
+        first = first or b
+        b.set_active(oid == active)
+        b.connect("toggled", lambda w, i=oid: w.get_active() and on_change(i))
+        box.pack_start(b, False, False, 0)
+    box.set_valign(Gtk.Align.CENTER)
+    return box
 
 
 class Swatch(Gtk.DrawingArea):
