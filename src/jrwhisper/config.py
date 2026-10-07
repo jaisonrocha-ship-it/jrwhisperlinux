@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "auto_languages": ["pt", "en"],  # "auto" escolhe só entre estes
     "caption_language": "pt",        # legendas ao vivo traduzem para este ("" = idioma original)
     "caption_lines": 8,              # linhas visíveis na legenda (o ditado mostra 3)
-    "caption_translator": "auto",    # auto (NVIDIA se houver chave, senão Ollama local) | ollama | nvidia
+    "caption_translator": "auto",    # auto (DeepSeek, NVIDIA, Ollama: a 1ª com chave) | deepseek | nvidia | ollama
     "sample_rate": 16000,
     "mic_device": "@DEFAULT_SOURCE@",
     "silence_threshold": 0,

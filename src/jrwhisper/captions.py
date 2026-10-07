@@ -120,12 +120,13 @@ class Chunker:
 
 
 def pick_translator(config):
-    """Config de IA para traduzir legendas. "auto": NVIDIA se houver chave (tradução melhor, ~0,7 s);
-    senão Ollama local com um modelo de conversa (~0,4 s, sem limite, mas o qwen2.5 7B vazava chinês e
-    traduzia "booking" como "livro"); senão o provedor da aba Inteligência."""
+    """Config de IA para traduzir legendas. "auto" escolhe pela qualidade medida (chrF → pt-BR, 21 frases
+    en/ru/zh/es): DeepSeek 89,3 (sem limite) > NVIDIA 82,7 (limite ~40/min) > Ollama local. Locais testados
+    e descartados: NLLB-200 1.3B 72,8 (português de Portugal) e Hunyuan MT 1.5 1.8B ~71 (inventava trechos,
+    completava frases); qwen2.5 7B vazava chinês."""
     choice = config.get("caption_translator", "auto")
-    if choice == "auto" and secrets.get_key("nvidia"):
-        choice = "nvidia"
+    if choice == "auto":
+        choice = next((p for p in ("deepseek", "nvidia") if secrets.get_key(p)), "auto")
     if choice in ("auto", "ollama"):
         url = config.get("ai_ollama_url", "http://localhost:11434")
         try:
