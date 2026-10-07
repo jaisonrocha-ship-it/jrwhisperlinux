@@ -1,7 +1,9 @@
-"""Reescrita do ditado por LLM: NVIDIA NIM (nuvem, API compatível com OpenAI) ou Ollama (local).
+"""Reescrita do ditado e tradução das legendas por LLM: NVIDIA NIM ou DeepSeek (nuvem, API compatível
+com OpenAI) ou Ollama (local).
 
 Regra de ouro: a IA nunca bloqueia o ditado. Timeout ou erro → o texto original é colado.
 """
+import functools
 import re
 import time
 import unicodedata
@@ -11,6 +13,13 @@ import requests
 from . import secrets
 
 NIM_URL = "https://integrate.api.nvidia.com/v1"
+DEEPSEEK_URL = "https://api.deepseek.com"
+# provedor → (URL base, chave do modelo no config, modelo padrão, nome). A chave de API fica no keyring.
+CLOUD = {
+    "nvidia": (NIM_URL, "ai_model", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA"),
+    "deepseek": (DEEPSEEK_URL, "ai_deepseek_model", "deepseek-flash", "DeepSeek"),
+}
+_http = requests.Session()  # keep-alive: legendas chamam várias vezes por segundo, sem refazer o TLS
 # O texto vai entre <ditado></ditado>: sem isso, "me diga uma piada" no modo Corrigir virava uma piada e
 # "você pode me ajudar amanhã?" no modo Mensagem virava "Claro, posso ajudar…".
 SYSTEM = ("Você reescreve textos ditados por voz em português do Brasil. O texto vem entre <ditado> e "
@@ -39,10 +48,19 @@ def _norm(text):
     return "".join(c for c in text if c.isalnum() or c.isspace()).strip()
 
 
-def _key():
-    key = secrets.get_key("nvidia")
+DEEPSEEK_MODELS = [("deepseek-flash", "DeepSeek V4.1 Flash · ~0,8 s"), ("deepseek-v4-pro", "DeepSeek V4 Pro")]
+
+
+@functools.lru_cache(maxsize=None)
+def _cached_key(provider):
+    return secrets.get_key(provider)  # secret-tool é um processo: uma vez por provedor e processo
+
+
+def _key(provider):
+    key = _cached_key(provider)
     if not key:
-        raise AIError("chave da NVIDIA não configurada (Ajustes → Inteligência)")
+        _cached_key.cache_clear()  # sem chave não fica em cache: dá para salvar nos Ajustes e tentar de novo
+        raise AIError(f"chave da {CLOUD[provider][3]} não configurada (Ajustes → Inteligência)")
     return key
 
 
@@ -52,6 +70,8 @@ def _no_reasoning(model):
         return {"chat_template_kwargs": {"enable_thinking": False}}
     if "gpt-oss" in model:
         return {"reasoning_effort": "low"}
+    if model.startswith("deepseek"):  # V4 Flash: 1,3–2,1 s pensando, 0,8 s sem
+        return {"thinking": {"type": "disabled"}}
     return {}
 
 
@@ -65,19 +85,22 @@ def complete(config, instruction, text, timeout=None, system=SYSTEM):
     messages = [{"role": "system", "content": f"{system}\n\nInstrução: {instruction}"},
                 {"role": "user", "content": text}]
     try:
-        if config.get("ai_provider") == "ollama":
-            r = requests.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
+        provider = config.get("ai_provider", "nvidia")
+        if provider == "ollama":
+            r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
                               json={"model": config.get("ai_ollama_model", "llama3.2"), "messages": messages,
                                     "stream": False, "options": {"temperature": 0.2}}, timeout=timeout)
             r.raise_for_status()
             out = r.json()["message"]["content"]
         else:
-            model = config.get("ai_model")
-            r = requests.post(f"{NIM_URL}/chat/completions",
-                              headers={"Authorization": f"Bearer {_key()}"},
-                              json={"model": model, "messages": messages, "temperature": 0.2,
-                                    "max_tokens": max(256, len(text) * 2), **_no_reasoning(model)},
-                              timeout=timeout)
+            provider = provider if provider in CLOUD else "nvidia"
+            url, model_key, default, _name = CLOUD[provider]
+            model = config.get(model_key) or default
+            r = _http.post(f"{url}/chat/completions",
+                           headers={"Authorization": f"Bearer {_key(provider)}"},
+                           json={"model": model, "messages": messages, "temperature": 0.2,
+                                 "max_tokens": max(256, len(text) * 2), **_no_reasoning(model)},
+                           timeout=timeout)
             r.raise_for_status()
             out = r.json()["choices"][0]["message"]["content"] or ""
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:

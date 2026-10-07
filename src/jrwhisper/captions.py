@@ -139,7 +139,7 @@ def pick_translator(config):
             return dict(config, ai_provider="ollama", ai_ollama_model=model)
         if choice == "ollama":
             _debug_log("Legendas: Ollama sem modelo de conversa; usando o provedor da aba Inteligência")
-    return dict(config, ai_provider="nvidia") if choice == "nvidia" else config
+    return dict(config, ai_provider=choice) if choice in ai.CLOUD else config
 
 
 class CaptionThread(threading.Thread):
@@ -328,7 +328,7 @@ class CaptionThread(threading.Thread):
 
     def _budget(self):
         """Chamadas restantes no minuto (NVIDIA grátis: ~40/min, acima disso devolve 429)."""
-        if self.mt_cfg.get("ai_provider") == "ollama":
+        if self.mt_cfg.get("ai_provider", "nvidia") != "nvidia":  # só o plano grátis da NVIDIA limita
             return 99
         now = time.time()
         while self._sent and now - self._sent[0] > 60:
@@ -367,10 +367,10 @@ class CaptionThread(threading.Thread):
         if self.target and not self.whisper_translates:
             self.mt_cfg = pick_translator(self.config)
             local = self.mt_cfg.get("ai_provider") == "ollama"
-            _debug_log(f"Legendas: tradutor {self.mt_cfg.get('ai_ollama_model') if local else self.mt_cfg.get('ai_model')}")
+            _debug_log(f"Legendas: tradutor {self.mt_cfg.get('ai_provider')}")
             if local:  # carrega o modelo já (a 1ª chamada leva ~8 s), enquanto o idioma ainda é detectado
                 self._translate("ok")
-        live_gap = 0.0 if self.mt_cfg.get("ai_provider") == "ollama" else NIM_LIVE_GAP
+        live_gap = NIM_LIVE_GAP if self.mt_cfg.get("ai_provider", "nvidia") == "nvidia" else 0.0
         last_live = 0.0
         stop = False
         while not stop:

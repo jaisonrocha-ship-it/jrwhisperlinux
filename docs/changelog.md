@@ -10,6 +10,8 @@
 * **Legendas ao vivo traduzidas** (`dictate --captions`): o trecho em andamento é retranscrito a cada 0,5 s e a prévia também é traduzida; frases fecham nos limites de segmento do próprio Whisper (sem partir palavra) ou nas pausas. Idioma detectado uma vez com ≥70% de confiança antes da 1ª legenda (em 1–3 s o Whisper confundia russo com alemão). Sem VAD (não descarta canto). Tradutor: NVIDIA (prévia a cada 2,5 s, sob o limite do plano grátis) ou Ollama local (~0,4 s, sem limite). Em inglês o próprio Whisper traduz.
 * **Engrenagem durante um ditado deixava o atalho mudo** enquanto os Ajustes ficassem abertos (a trava do ditado continuava presa): agora é solta.
 * **Som do computador como entrada** (`dictate --system` ou Ajustes → Microfone): transcreve vídeo/reunião direto da saída de áudio (`@DEFAULT_MONITOR@`), sem calibrar, pausar mídia, abaixar volume nem RNNoise; termina no 2º toque ou na duração máxima.
+* **DeepSeek como provedor de IA** (ditado e legendas), V4.1 Flash sem raciocínio. Medido pelo mesmo código: tradução melhor que a NVIDIA (chrF 89,3 × 82,7; a NVIDIA chegou a devolver espanhol sem traduzir), porém ~2× mais lenta por chamada (805 × 430 ms); nas legendas, latência ponta a ponta equivalente e sem limite de requisições.
+* **Conexão HTTPS reaproveitada e chave em cache:** a NVIDIA caiu de ~730 para ~430 ms por chamada.
 * **Trocar o modelo não exige reiniciar o serviço:** o daemon recarrega no próximo ditado.
 * **Pausa música e vídeos ao ditar** (MPRIS: navegador, Spotify, VLC…) e retoma depois. Com música tocando, o mic ouvia as caixas de som como fala: o ditado não encerrava, a letra aparecia na tela e o Whisper alucinava.
 

@@ -559,7 +559,7 @@ class SettingsWindow(Gtk.Window):
                      "(limite do plano grátis). Ollama: ~0,4 s, sem limite e nada sai do computador, mas modelos "
                      "pequenos traduzem pior.",
                      [("auto", "Automático (NVIDIA, senão Ollama)"), ("ollama", "Ollama (local)"),
-                      ("nvidia", "NVIDIA NIM (nuvem)")],
+                      ("nvidia", "NVIDIA NIM (nuvem)"), ("deepseek", "DeepSeek (nuvem)")],
                      self.config.get("caption_translator", "auto"), lambda v: self.set("caption_translator", v))
         t.slider_row(lb, "Linhas na tela", None, 3, 14, 1, self.config.get("caption_lines", 8),
                      lambda v: f"{int(v)}", lambda v: self.set("caption_lines", int(v)))
@@ -611,33 +611,20 @@ class SettingsWindow(Gtk.Window):
 
         lb = t.group(content, "Provedor")
         provider_rows = {}
-        t.row(lb, "Serviço", None, t.segmented([("nvidia", "NVIDIA NIM"), ("ollama", "Ollama (local)")],
+        t.row(lb, "Serviço", None, t.segmented([("nvidia", "NVIDIA NIM"), ("deepseek", "DeepSeek"),
+                                                ("ollama", "Ollama (local)")],
                                                self.config.get("ai_provider", "nvidia"),
                                                lambda v: (self.set("ai_provider", v), self._ai_provider_rows(provider_rows))))
-        from .. import secrets
-        key_label = t.label(secrets.masked(secrets.get_key("nvidia")), "dim")
-        kb = Gtk.Box(spacing=10)
-        kb.pack_start(key_label, False, False, 0)
-        change = Gtk.Button(label="Alterar…")
-
-        def change_key(_b):
-            def build(b):
-                b.pack_start(t.label("Chave de API da NVIDIA (nvapi-…). Fica no chaveiro do sistema.", wrap=True),
-                             False, False, 0)
-                e = Gtk.Entry(visibility=False, placeholder_text="nvapi-…")
-                b.pack_start(e, False, False, 0)
-                return e.get_text
-            key = self._dialog("Chave da NVIDIA", build)
-            if key:
-                secrets.set_key("nvidia", key)
-                key_label.set_text(secrets.masked(key))
-        change.connect("clicked", change_key)
-        kb.pack_start(change, False, False, 0)
-        provider_rows["nvidia_key"] = t.row(lb, "Chave de API", "Guardada no chaveiro do sistema (gnome-keyring).", kb)
         from .. import ai
+        provider_rows["nvidia_key"] = self._key_row(lb, "nvidia", "NVIDIA", "nvapi-…")
         provider_rows["nvidia_model"] = t.choice_row(
             lb, "Modelo", "Testados com a sua chave; os mais rápidos deixam o ditado fluido.", ai.RECOMMENDED,
             self.config.get("ai_model"), lambda v: self.set("ai_model", v)).get_ancestor(Gtk.ListBoxRow)
+        provider_rows["deepseek_key"] = self._key_row(lb, "deepseek", "DeepSeek", "sk-…")
+        provider_rows["deepseek_model"] = t.choice_row(
+            lb, "Modelo", "Flash é o rápido (~0,8 s, sem raciocínio); Pro pensa mais e demora.", ai.DEEPSEEK_MODELS,
+            self.config.get("ai_deepseek_model", "deepseek-flash"),
+            lambda v: self.set("ai_deepseek_model", v)).get_ancestor(Gtk.ListBoxRow)
         provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
             "ai_ollama_url", "http://localhost:11434"))
         provider_rows["ollama_model"] = t.row(lb, "Modelo do Ollama", None, self._entry("ai_ollama_model", "llama3.2"))
@@ -672,10 +659,34 @@ class SettingsWindow(Gtk.Window):
         return e
 
     def _ai_provider_rows(self, rows):
-        ollama = self.config.get("ai_provider") == "ollama"
+        provider = self.config.get("ai_provider", "nvidia")
         for name, r in rows.items():
-            r.set_visible(name.startswith("ollama") == ollama)
+            r.set_visible(name.split("_")[0] == provider)
         return False
+
+    def _key_row(self, lb, provider, name, placeholder):
+        """Chave de API (só no chaveiro do sistema) com o botão Alterar…"""
+        from .. import ai, secrets
+        key_label = t.label(secrets.masked(secrets.get_key(provider)), "dim")
+        kb = Gtk.Box(spacing=10)
+        kb.pack_start(key_label, False, False, 0)
+        change = Gtk.Button(label="Alterar…")
+
+        def change_key(_b):
+            def build(b):
+                b.pack_start(t.label(f"Chave de API da {name} ({placeholder}). Fica no chaveiro do sistema.",
+                                     wrap=True), False, False, 0)
+                e = Gtk.Entry(visibility=False, placeholder_text=placeholder)
+                b.pack_start(e, False, False, 0)
+                return e.get_text
+            key = self._dialog(f"Chave da {name}", build)
+            if key:
+                secrets.set_key(provider, key)
+                ai._cached_key.cache_clear()  # o Testar desta janela já usa a nova
+                key_label.set_text(secrets.masked(key))
+        change.connect("clicked", change_key)
+        kb.pack_start(change, False, False, 0)
+        return t.row(lb, "Chave de API", "Guardada no chaveiro do sistema (gnome-keyring).", kb)
 
     def _test_ai(self, label):
         label.set_text("Testando…")

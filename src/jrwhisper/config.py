@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     "ai_enabled": False,
     "ai_provider": "nvidia",
     "ai_model": "nvidia/nemotron-3-super-120b-a12b",
+    "ai_deepseek_model": "deepseek-flash",
     "ai_ollama_url": "http://localhost:11434",
     "ai_ollama_model": "llama3.2",
     "ai_default_mode": "",
