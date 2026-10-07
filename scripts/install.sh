@@ -23,7 +23,8 @@ sudo apt-get install -y -qq \
     python3-venv python3-pip \
     pulseaudio-utils \
     xdotool xclip wtype wl-clipboard \
-    ffmpeg
+    ffmpeg \
+    python3-xlib python3-requests libsecret-tools dconf-cli fontconfig
 ok "Pacotes de sistema instalados"
 
 if [ ! -f "./src/dictate" ]; then

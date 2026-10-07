@@ -23,7 +23,9 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 | Arquivo | Função |
 |---------|--------|
 | `src/dictate` | Porta de entrada (bootstrap do venv + `jrwhisper.cli.main`) |
-| `src/jrwhisper/` | Pacote: `config`, `audio`, `transcribe`, `textproc`, `paste`, `dictation`, `cli`, `ui/{overlay,settings,calibration,theme}` |
+| `src/jrwhisper/` | Pacote. Núcleo: `config`, `audio` (captura, calibração por mic, Yeti), `transcribe` (Whisper/daemon/RNNoise), `dictation` (laço de sessão: PTT, mãos livres), `pipeline` (perfil → modo IA → formatação → IA → atalhos de texto), `textproc`, `paste`, `profiles`, `ai`, `history`, `ptt`, `shortcuts` (dconf), `secrets` (keyring), `cli` |
+| `src/jrwhisper/ui/` | `theme` (tokens macOS, componentes inset-grouped, PopupChoice, Swatch), `visuals` (Orbe/Ondas/Barras + FFT), `overlay` (HUD em Cairo), `settings` (10 abas), `calibration`, `history_search` (Spotlight) |
+| `assets/fonts/` | Inter variável (OFL), instalada pelo `install.sh` |
 | `scripts/install.sh` | One-line installer (curl | bash) |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
@@ -64,6 +66,10 @@ bash scripts/install.sh
 - **parec latency (PipeWire)**: use `--latency-msec=30` para evitar buffer de 2 segundos.
 - **Config.json no .gitignore**: alterações locais não são commitadas.
 - **RNNoise**: `config/bd.rnnn` (~300KB, domínio público) é o único modelo usado. Instalado em `~/.config/dictate/`. O teste `test_capture_prebuffer.py` rejeita arquivo < 100KB (já houve um "404: Not Found" salvo no lugar).
+- **Tema GTK do sistema (MacTahoe-Dark)**: impõe 44 px a ComboBox e tamanho mínimo a botões. Use `theme.PopupChoice` (não `Gtk.ComboBoxText`) e `theme.Swatch` (Cairo) para bolinhas de cor; regras de cor de botão precisam mirar o `label` filho (`label {}` global sobrescreve).
+- **NVIDIA NIM**: dos 59 modelos listados por `/v1/models`, só 8 respondiam com a chave (out/2026); o resto dá 404. Modelos Nemotron/gpt-oss são de raciocínio: `ai._no_reasoning` manda `enable_thinking: false` / `reasoning_effort: low`, senão gastam segundos "pensando". Lista verificada em `ai.RECOMMENDED`. A chave fica só no gnome-keyring (`secret-tool lookup service jrwhisper provider nvidia`); nunca em config, código ou log.
+- **Overlay click-through**: `input_shape_combine_region` só na engrenagem; o resto da janela não captura cliques. Tudo desenhado em Cairo/PangoCairo (sem widgets), então o tema do sistema não interfere.
+- **Ajustes aplicam na hora**: `SettingsWindow.set()` grava com debounce de 350 ms (escrita atômica). Chaves novas de config devem ser planas (o `load_config` faz merge raso).
 - **Wayland overlay**: overlay GTK3 funciona via XWayland. Em Wayland puro, use `wtype` em vez de `xdotool`.
 
 ## Infra de Publicação
@@ -92,6 +98,7 @@ ssh jrdev-oracle 'sudo mv /tmp/install.sh /var/www/sites/jrwhisper.jasonrock.dev
 
 ## Roadmap Priorizado
 
+0. ~~Redesign estilo macOS + IA, perfis, histórico, PTT, mãos livres~~ (out/2026)
 1. **Packaging .deb** — instalação nativa via apt
 2. **Testes automatizados** — pytest para motor de áudio e VAD
 3. **CI/CD** — GitHub Actions para Ubuntu/Mint/Fedora
