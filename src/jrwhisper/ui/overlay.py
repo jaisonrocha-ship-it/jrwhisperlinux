@@ -9,6 +9,7 @@ update_text, show_choices, hide_choices, pick, fade_out, dictate_thread, wants_s
 """
 import math
 import re
+import time
 
 import cairo
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
@@ -70,6 +71,14 @@ class WhisperFlowOverlay(Gtk.Window):
         self.show_text = bool(config.get("overlay_show_text", True))
         # legendas: mais linhas e cartão mais largo (ditado: 3 linhas que acompanham o fim)
         self.max_lines = int(config.get("overlay_lines", self.MAX_LINES))
+        # legendas ao vivo: frases em blocos estáveis + prévia, rolagem suave (update_captions)
+        self.captions = bool(config.get("overlay_captions"))
+        self.cap_blocks, self.cap_live = [], ""
+        self.cap_scroll = 0.0       # rolagem desenhada (anima até o alvo)
+        self.cap_total = self.cap_inner = 0.0
+        self.cap_follow = True      # acompanha o fim; a roda do mouse pausa para reler
+        self.cap_user, self.cap_user_t = 0.0, 0.0
+        self._cap_h = {}            # altura de cada bloco já medido (frases fechadas não mudam)
         # IA ligada (fora do mãos livres): o texto espera a escolha em vez de colar sozinho
         self.choices_enabled = bool(config.get("ai_enabled")) and not config.get("handsfree_enabled")
         position = config.get("overlay_position", "bottom")
@@ -218,12 +227,19 @@ class WhisperFlowOverlay(Gtk.Window):
         return True
 
     def _on_scroll(self, _w, ev):
-        if not self.choices:
+        if not (self.choices or self.captions):
             return False
         step = {Gdk.ScrollDirection.UP: -1, Gdk.ScrollDirection.DOWN: 1}.get(ev.direction)
         if step is None:  # touchpad: rolagem suave
             ok, _dx, dy = ev.get_scroll_deltas()
             step = (dy > 0) - (dy < 0) if ok else 0
+        if self.captions:  # reler: pausa o acompanhamento até voltar ao fim (ou 8 s parado)
+            bottom = self.cap_total - self.cap_inner
+            start = self.cap_scroll if self.cap_follow else self.cap_user
+            self.cap_user = max(min(0.0, bottom), min(bottom, start + step * 2 * self.line_h))
+            self.cap_follow = self.cap_user >= bottom - 1
+            self.cap_user_t = time.monotonic()
+            return True
         self._scroll = max(0, self._scroll + step)  # o limite de baixo é aplicado no desenho
         return True
 
@@ -317,6 +333,11 @@ class WhisperFlowOverlay(Gtk.Window):
         k = 1 - math.exp(-dt * 10)
         self.text_alpha += ((1.0 if self.text else 0.0) - self.text_alpha) * k
         self.box_h += (self._target_box_h() - self.box_h) * k
+        if self.captions:
+            if not self.cap_follow and time.monotonic() - self.cap_user_t > 8:
+                self.cap_follow = True  # parou de reler: volta ao vivo
+            target = self.cap_total - self.cap_inner if self.cap_follow else self.cap_user
+            self.cap_scroll += (target - self.cap_scroll) * (1 - math.exp(-dt * 9))  # desliza, não salta
         self.queue_draw()
         return True
 
@@ -363,6 +384,11 @@ class WhisperFlowOverlay(Gtk.Window):
         self.final = final
         if final:
             self._final_text = text
+
+    def update_captions(self, blocks, live):
+        """Legendas: frases fechadas (cada uma um bloco que não muda mais) e a prévia, esmaecida."""
+        self.cap_blocks, self.cap_live = blocks, live
+        self.text = " ".join(blocks + [live]).strip()
 
     def get_final_text(self):
         return self._final_text
@@ -454,6 +480,8 @@ class WhisperFlowOverlay(Gtk.Window):
     def _target_box_h(self):
         if not self.text:
             return 0.0
+        if self.captions:  # altura fixa: o cartão não estica nem encolhe enquanto o texto corre
+            return 2 * self.text_pad + self.line_h * self.max_lines
         n = getattr(self, "_n_lines", 1)
         return 2 * self.text_pad + self.line_h * n + self._chips_h(getattr(self, "_n_chip_rows", 0))
 
@@ -486,7 +514,87 @@ class WhisperFlowOverlay(Gtk.Window):
         self._draw_text(cr)
         return False
 
+    def _cap_layout(self, cr, text, kind, width):
+        markup = GLib.markup_escape_text(text)
+        lay = self._layout(cr, f"<i>{markup}</i>" if kind == "live" else markup, self.font_px,
+                           Pango.Weight.MEDIUM if kind == "new" else Pango.Weight.NORMAL, width=width, markup=True)
+        lay.set_alignment(Pango.Alignment.LEFT)
+        return lay
+
+    def _draw_captions(self, cr):
+        """Frases em blocos estáveis (só a prévia muda), ancoradas embaixo; o conjunto desliza para cima."""
+        if self.box_h < 1 or self.text_alpha < 0.02:
+            self._set_chip_rects([])
+            return
+        a, bw = self.text_alpha, self.text_w
+        x = self.cx - bw / 2
+        y = self.text_anchor - self.box_h if self.text_above else self.text_anchor
+        rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
+        cr.set_source_rgba(0.09, 0.09, 0.11, 0.86 * a)
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.08 * a)
+        cr.set_line_width(1)
+        cr.stroke()
+
+        width, gap = bw - 2 * self.text_pad, self.line_h * 0.4
+        n = len(self.cap_blocks)
+        items = [(t, "new" if i == n - 1 else ("prev" if i == n - 2 else "old")) for i, t in enumerate(self.cap_blocks)]
+        if self.cap_live:
+            items.append((self.cap_live, "live"))
+        if len(self._cap_h) > 400:
+            self._cap_h.clear()
+        heights = []
+        for t, kind in items:
+            key = (t, kind == "live", kind == "new")
+            if key not in self._cap_h:
+                self._cap_h[key] = self._cap_layout(cr, t, kind, width).get_pixel_size()[1]
+            heights.append(self._cap_h[key])
+        top, inner = y + self.text_pad, self.box_h - 2 * self.text_pad
+        self.cap_total = sum(heights) + gap * max(len(items) - 1, 0)
+        self.cap_inner = inner
+
+        cr.save()
+        cr.rectangle(x, top, bw, inner)
+        cr.clip()
+        alpha = {"new": 1.0, "prev": 0.75, "old": 0.5, "live": 0.55}
+        if not self.cap_follow:  # relendo: tudo legível
+            alpha.update(prev=0.92, old=0.92)
+        yy = top - self.cap_scroll
+        for (t, kind), h in zip(items, heights):
+            if yy + h >= top and yy <= top + inner:  # só o que aparece é diagramado
+                lay = self._cap_layout(cr, t, kind, width)
+                cr.move_to(x + self.text_pad, yy)
+                cr.set_source_rgba(1, 1, 1, alpha[kind] * a)
+                PangoCairo.show_layout(cr, lay)
+            yy += h + gap
+        cr.restore()
+        # as linhas que saem por cima somem num degradê (o olho não leva susto)
+        fade = cairo.LinearGradient(0, y, 0, top + self.line_h * 1.2)
+        fade.add_color_stop_rgba(0, 0.09, 0.09, 0.11, 0.86 * a)
+        fade.add_color_stop_rgba(1, 0.09, 0.09, 0.11, 0.0)
+        cr.save()
+        rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
+        cr.clip()
+        cr.rectangle(x, y, bw, top + self.line_h * 1.2 - y)
+        cr.set_source(fade)
+        cr.fill()
+        cr.restore()
+        if not self.cap_follow:  # relendo: avisa que o ao vivo continua embaixo
+            lay = self._layout(cr, "↓ ao vivo", 11 * self.scale, Pango.Weight.SEMIBOLD)
+            w, h = lay.get_pixel_size()
+            px, py = 8 * self.scale, 3 * self.scale
+            bx, by = x + bw - w - 2 * px - 10 * self.scale, y + self.box_h - h - 2 * py - 8 * self.scale
+            rounded_rect(cr, bx, by, w + 2 * px, h + 2 * py, (h + 2 * py) / 2)
+            cr.set_source_rgba(*self.visual.accent[0], 0.9 * a)
+            cr.fill()
+            cr.move_to(bx + px, by + py)
+            cr.set_source_rgba(1, 1, 1, a)
+            PangoCairo.show_layout(cr, lay)
+        self._set_chip_rects([(x, y, bw, self.box_h, "box")])  # o cartão recebe a roda do mouse
+
     def _draw_text(self, cr):
+        if self.captions:
+            return self._draw_captions(cr)
         lines = self._visible_lines(cr) if (self.show_text or self.choices) else []
         self._n_lines = max(len(lines), 1)
         chip_rows = self._chip_rows(cr)

@@ -440,11 +440,10 @@ class CaptionThread(threading.Thread):
             # o que ainda não foi traduzido vira "…" até a tradução chegar.
             waiting = bool(self.live["src"]) and not self.live["tr"]
             live = self.live["tr"] or ("…" if waiting else "")
-            if self.pending:  # o provisório da frase fechada já cobre o começo da prévia: sem duplicar
-                live = "…" if self.live["src"] else ""
-            parts = self.lines[-30:] + [p for p in self.pending if p] + ([live] if live else [])
-            final = not (self.pending or live)
-        GLib.idle_add(self.overlay.update_text, " ".join(parts), final)
+            if self.pending:  # o provisório da frase fechada já cobre o começo da prévia: sem duplicar;
+                live = "…"    # e, se a frase fechada ainda não tem tradução nenhuma, a tela não fica vazia
+            blocks = self.lines[-50:] + [p for p in self.pending if p]
+        GLib.idle_add(self.overlay.update_captions, blocks, live)
 
     def _status(self, text, state):
         GLib.idle_add(self.overlay.update_status, text, state)

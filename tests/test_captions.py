@@ -65,8 +65,8 @@ def _thread(fake):
     captions.time.sleep = lambda s: None  # espera de 429 sem atrasar o teste
 
     class Overlay:
-        def update_text(self, text, final):
-            self.text, self.final = text, final
+        def update_captions(self, blocks, live):
+            self.blocks, self.live = blocks, live
 
         def update_status(self, *a):
             pass
@@ -87,7 +87,7 @@ def test_queued_sentences_go_in_one_call():
     th = _thread(lambda cfg, ins, text, timeout=None, system=None: calls.append(text) or text.upper())
     _run_mt(th, [("hello", "en"), ("world", "en")])
     assert calls == ["<fala>hello world</fala>"] and th.lines == ["HELLO WORLD"]  # marcações saem da tela
-    assert not th.pending and th.overlay.final
+    assert not th.pending and th.overlay.blocks == ["HELLO WORLD"] and not th.overlay.live
 
 
 def test_429_retries_instead_of_showing_original():

@@ -497,7 +497,7 @@ def run_overlay_mode(config, mode=None, captions=False):
 
         if captions:  # legendas: o texto sempre aparece e não há revisão com IA
             from .captions import CaptionThread
-            overlay = WhisperFlowOverlay(dict(config, overlay_show_text=True, ai_enabled=False,
+            overlay = WhisperFlowOverlay(dict(config, overlay_show_text=True, ai_enabled=False, overlay_captions=True,
                                               overlay_lines=config.get("caption_lines", 8)))
             thread = CaptionThread(overlay, config)
         else:
