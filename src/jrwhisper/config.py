@@ -23,6 +23,10 @@ DEFAULT_CONFIG = {
     "auto_languages": ["pt", "en"],  # "auto" escolhe só entre estes
     "caption_language": "pt",        # legendas ao vivo traduzem para este ("" = idioma original)
     "caption_lines": 8,              # linhas visíveis na legenda (o ditado mostra 3)
+    "caption_lens": False,           # efeito lente: a linha do foco maior, as vizinhas menores
+    "caption_lens_zoom": 1.5,        # aumento da linha do foco
+    "caption_lens_reach": 2,         # alcance da lente, em linhas
+    "caption_lens_pos": "center",    # foco: top | center | bottom
     "caption_translator": "auto",    # auto (DeepSeek, NVIDIA, Ollama: a 1ª com chave) | deepseek | nvidia | ollama
     "sample_rate": 16000,
     "mic_device": "@DEFAULT_SOURCE@",

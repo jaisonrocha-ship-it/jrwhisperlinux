@@ -24,6 +24,7 @@ from ..paste import copy_text
 from ..transcribe import is_daemon_running
 from . import theme as t
 from .calibration import CalibrationWindow
+from .captionview import CaptionView
 from .visuals import VISUAL_LABELS, make_visual, rounded_rect, spectrum_bands
 
 DICTATE_CMD = os.path.expanduser("~/.local/bin/dictate")
@@ -103,6 +104,50 @@ class VisualPreview(Gtk.DrawingArea):
         cr.set_source(g)
         cr.paint()
         self.visual.draw(cr, width / 2, height / 2)
+        return False
+
+
+class CaptionPreview(Gtk.DrawingArea):
+    """Legenda de exemplo correndo com o mesmo desenho do overlay (CaptionView): ajuste vendo o efeito."""
+    SAMPLE = ["O navio chega ao porto amanhã de manhã.", "Precisamos descarregar os contêineres antes do meio-dia.",
+              "Por favor, confirme a reserva com o terminal.",
+              "O despachante já liberou a carga e o armador confirmou a atracação.",
+              "Se houver atraso, avise o terminal com antecedência para remarcar a janela.",
+              "A estufagem do contêiner refrigerado começa às sete da manhã."]
+    EVERY = 1.6  # s por frase: fala rápida, como nas legendas de verdade
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.rebuild()
+        self._last, self._t = None, 0.0
+        self.connect("draw", self._draw)
+        self.add_tick_callback(self._tick)
+
+    def rebuild(self):
+        self.view = CaptionView(self.config, 1.0, t.hex_to_rgb(t.ui_accent(self.config)))
+        lines = min(int(self.config.get("caption_lines", 8)), 8)
+        self.set_size_request(-1, int(2 * self.view.pad + self.view.line_h * lines))
+        self.queue_resize()
+
+    def _tick(self, _w, clock):
+        now = clock.get_frame_time() / 1e6
+        dt = min(now - self._last, 0.05) if self._last else 1 / 60
+        self._last = now
+        self._t += dt
+        i, frac = divmod(self._t / self.EVERY, 1.0)
+        n = int(i) % (len(self.SAMPLE) * 3)  # recomeça depois de 3 voltas para a lista não crescer sem fim
+        done = [self.SAMPLE[k % len(self.SAMPLE)] for k in range(n)]
+        nxt = self.SAMPLE[n % len(self.SAMPLE)]
+        self.view.set_text(done[-12:], nxt[: max(1, int(len(nxt) * min(frac * 1.4, 1.0)))] + "…" if frac < 0.7 else "")
+        if frac >= 0.7:  # frase fechou: entra como bloco
+            self.view.set_text((done + [nxt])[-12:], "")
+        self.view.advance(dt)
+        self.queue_draw()
+        return True
+
+    def _draw(self, w, cr):
+        self.view.draw(cr, 0, 0, w.get_allocated_width(), w.get_allocated_height())
         return False
 
 
@@ -562,10 +607,44 @@ class SettingsWindow(Gtk.Window):
                       ("nvidia", "NVIDIA NIM (nuvem)"), ("hymt", "Hunyuan MT 1.5 (local)"),
                       ("ollama", "Ollama (outro modelo local)")],
                      self.config.get("caption_translator", "auto"), lambda v: self.set("caption_translator", v))
-        t.slider_row(lb, "Linhas na tela", None, 3, 14, 1, self.config.get("caption_lines", 8),
-                     lambda v: f"{int(v)}", lambda v: self.set("caption_lines", int(v)))
         self._shortcut_row(lb, "Atalho das legendas", "Toque para começar; de novo para encerrar.",
                            "Dictate: legendas", f"{DICTATE_CMD} --captions")
+
+        lb = t.group(box, "Aparência da legenda",
+                     "Lente: a linha em foco fica maior e as vizinhas encolhem e esmaecem, como uma lupa. O foco "
+                     "acompanha a frase mais nova; a frase em andamento vem por baixo. Com o foco no centro sobra "
+                     "espaço embaixo; \u201cAbaixo\u201d mostra mais frases anteriores.")
+        preview = CaptionPreview(self.config)
+        r = Gtk.ListBoxRow()
+        r.set_activatable(False)
+        r.add(preview)
+        lb.add(r)
+
+        def apply(key, value):
+            self.set(key, value)
+            preview.rebuild()
+        t.slider_row(lb, "Linhas na tela", None, 3, 14, 1, self.config.get("caption_lines", 8),
+                     lambda v: f"{int(v)}", lambda v: apply("caption_lines", int(v)))
+        lens_rows = []
+
+        def toggle_lens(on):
+            apply("caption_lens", on)
+            for row in lens_rows:
+                row.set_sensitive(on)
+        t.switch_row(lb, "Efeito lente", "Linha em foco maior, as de cima e de baixo menores.",
+                     self.config.get("caption_lens"), toggle_lens)
+        lens_rows.append(t.slider_row(lb, "Aumento", "Tamanho da linha em foco.", 1.1, 2.0, 0.1,
+                                      self.config.get("caption_lens_zoom", 1.5), lambda v: f"{v:.1f}×".replace(".", ","),
+                                      lambda v: apply("caption_lens_zoom", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
+        lens_rows.append(t.slider_row(lb, "Alcance", "Quantas linhas em volta do foco também crescem.", 1, 4, 0.5,
+                                      self.config.get("caption_lens_reach", 2),
+                                      lambda v: f"{v:g} linha{'s' if v > 1 else ''}".replace(".", ","),
+                                      lambda v: apply("caption_lens_reach", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
+        lens_rows.append(t.row(lb, "Posição do foco", None, t.segmented(
+            [("top", "Acima"), ("center", "Centro"), ("bottom", "Abaixo")],
+            self.config.get("caption_lens_pos", "center"), lambda v: apply("caption_lens_pos", v))))
+        for row in lens_rows:
+            row.set_sensitive(bool(self.config.get("caption_lens")))
 
         lb = t.group(box, "Vocabulário", "Nomes, siglas e jargões que o Whisper deve reconhecer, separados por vírgula.")
         r = Gtk.ListBoxRow()

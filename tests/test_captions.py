@@ -157,13 +157,35 @@ def test_pick_hunyuan_or_fall_back():
         captions._ollama_models = real
 
 
+def test_lens_math():
+    from jrwhisper.ui.captionview import MIN_EDGE, lens_edge, lens_map
+    line, side = 21.0, 84.0  # 4 linhas de cada lado do foco
+    for zoom in (1.2, 1.5, 2.0):
+        for reach in (1, 2, 3):
+            r = reach * line
+            e = lens_edge(zoom, r, side)
+            shift0, s0 = lens_map(0, zoom, r, e)
+            assert shift0 == 0 and abs(s0 - zoom) < 1e-9  # o foco tem exatamente o aumento pedido
+            shift, s_edge = lens_map(side, zoom, r, e)
+            if e > MIN_EDGE:  # sem bater no mínimo legível, a borda continua na borda: o cartão não cresce
+                assert abs(shift - side) < 0.5, (zoom, reach, shift)
+            assert MIN_EDGE <= s_edge < zoom
+            sh, _ = lens_map(-side, zoom, r, e)
+            assert abs(sh + shift) < 1e-9  # simétrica
+            prev = -1e9
+            for d in range(0, int(side) + 1, 3):  # a ordem das linhas nunca se inverte
+                cur = lens_map(d, zoom, r, e)[0]
+                assert cur > prev
+                prev = cur
+
+
 def run_tests():
     failed = False
     for fn in (test_cuts_on_pauses, test_quiet_video_still_cuts, test_silence_only_never_emits_and_stays_small,
                test_continuous_speech_cut_at_quietest_point, test_asr_cut_keeps_epoch_honest,
                test_queued_sentences_go_in_one_call, test_429_retries_instead_of_showing_original,
                test_same_language_skips_ai_and_failure_falls_back, test_cjk_leak_is_stripped,
-               test_hunyuan_uses_official_prompt, test_pick_hunyuan_or_fall_back):
+               test_hunyuan_uses_official_prompt, test_pick_hunyuan_or_fall_back, test_lens_math):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
