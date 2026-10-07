@@ -11,10 +11,11 @@ import numpy as np
 from gi.repository import Gtk, GLib
 
 from .audio import AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume, is_yeti, resolve_mic, set_volume, yeti_hw_problem
-from .config import CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS, TICK_INTERVAL, _debug_log
+from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS,
+                     THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import paste_text
 from .profiles import window_class
-from . import history, pipeline
+from . import history, pipeline, ptt
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -94,9 +95,8 @@ class DictateThread(threading.Thread):
             sr = self.config["sample_rate"]
             manual = self.config.get("silence_threshold", 0)
             threshold = manual or calibrated_threshold(self.config, mic) or 0
-            silence_secs = self.config["silence_duration"]
-            listen_timeout = self.config.get("listen_timeout", 15)
-
+            keys = ptt.watcher_for(self.config)
+            handsfree = bool(self.config.get("handsfree_enabled"))
 
             play_sound(self.config, "start")  # antes do ducking, senão sai baixo demais
             if self.config.get("audio_ducking", True):
@@ -106,17 +106,10 @@ class DictateThread(threading.Thread):
                     _debug_log(f"Audio Ducking: salvando volume ({self.original_volume:.2f}) e reduzindo para {duck_vol:.2f}")
                     set_volume(duck_vol)
 
-
-            # Usa janela capturada antes do overlay aparecer
-            active_win = self.active_win
-
-
             capture = AudioCapture(mic, sr)
             capture.start()
-
             # Sem daemon, carrega o modelo aqui (não no __init__, que roda na thread GTK).
             self.transcriber = Transcriber(self.config)
-
 
             if fell_back:
                 _debug_log(f"Mic configurado ausente; usando {mic}")
@@ -124,164 +117,45 @@ class DictateThread(threading.Thread):
             else:
                 status = "Calibrando..."
             GLib.idle_add(self.overlay.update_status, status, "status-calibrating")
-            if threshold == 0:
+            # Ainda segurando o atalho depois de subir o processo? Então é "segurar para falar".
+            push_to_talk = bool(keys and keys.held())
+            if push_to_talk:
+                _debug_log("Push-to-talk: gravando enquanto a tecla estiver pressionada")
+                capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT)
+                threshold = threshold or THRESHOLD_FLOOR
+            elif threshold == 0:
                 threshold = calibrate_threshold(capture, self.config)
             else:
                 capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT)
                 time.sleep(0.2)
                 _debug_log(f"Threshold {'manual' if manual else 'calibrado'} ({mic}): {threshold:.6f}")
 
-
-            capture.get_audio_float32()
-
-            GLib.idle_add(self.overlay.update_status, "Aguardando voz...", "status-waiting")
-
-            recording_start = time.time()
-            started = False
-            all_audio = np.array([], dtype=np.float32)
-            speech_confirm_ticks = 0
-            silence_counter = 0
-            peak_rms = 0.0
-            silence_samples_needed = int(silence_secs / TICK_INTERVAL)
-            pre_buffer_captured = False
-            last_partial_time = time.time()
-            self.recording_active = True
-
+            timeout = self.config.get("listen_timeout", 15)
+            segment = 0
             while not self.cancelled:
-                time.sleep(TICK_INTERVAL)
-
-
-                rms = capture.get_rms()
-                peak_rms = max(peak_rms, rms)
-                GLib.idle_add(self.overlay.update_level, rms, threshold)
-                if self.overlay.wants_spectrum:
-                    GLib.idle_add(self.overlay.update_spectrum, spectrum_bands(capture.recent_samples(), sr))
-
-                now = time.time()
-
-                if rms > threshold:
-                    speech_confirm_ticks += 1
-
-                    if not started and speech_confirm_ticks >= SPEECH_START_TICKS:
-
-                        started = True
-                        GLib.idle_add(self.overlay.update_status, "Ouvindo...", "status-listening")
-
-
-                        if not pre_buffer_captured:
-                            pre_audio = capture.take_pre_buffer_clear_live()
-                            if len(pre_audio) > 0:
-                                all_audio = np.concatenate([all_audio, pre_audio])
-                            pre_buffer_captured = True
-
-
-
-
-                    if started and speech_confirm_ticks >= SPEECH_START_TICKS:
-                        silence_counter = 0
+                capture.get_audio_float32()
+                if push_to_talk:
+                    GLib.idle_add(self.overlay.update_status, "Ouvindo · solte para enviar", "status-listening")
+                elif segment:
+                    GLib.idle_add(self.overlay.update_text, "", False)
+                    GLib.idle_add(self.overlay.update_status, "Mãos livres · fale quando quiser", "status-waiting")
                 else:
-                    speech_confirm_ticks = 0
-                    if started:
-                        silence_counter += 1
+                    GLib.idle_add(self.overlay.update_status, "Aguardando voz...", "status-waiting")
 
+                audio, started, peak_rms = self._listen(capture, threshold, timeout, keys if push_to_talk else None)
+                if self.cancelled:
+                    _debug_log("DictateThread cancelada pelo usuário (configurações abertas). Abortando.")
+                    return
 
-                if not started and (now - recording_start) > listen_timeout:
-                    _debug_log(f"Timeout: {listen_timeout}s sem fala")
+                stop = self._finish_segment(audio, started, peak_rms, threshold, mic, sr, handsfree)
+                segment += 1
+                # Mãos livres segue até a frase de parada, um silêncio longo ou o atalho (SIGTERM).
+                if push_to_talk or not handsfree or stop or not started:
                     break
+                timeout = self.config.get("handsfree_idle_secs", 20)
+                time.sleep(0.6)
 
-
-                if started and silence_counter >= silence_samples_needed:
-                    _debug_log(f"Silêncio detectado após {now - recording_start:.1f}s")
-                    break
-
-
-                if started:
-                    chunk = capture.get_audio_float32()
-                    if len(chunk) > 0:
-                        all_audio = np.concatenate([all_audio, chunk])
-                else:
-                    capture.discard_live_buffer()
-
-
-                if len(all_audio) > sr * self.config["max_duration"]:
-                    _debug_log(f"Limite máximo atingido: {self.config['max_duration']}s")
-                    break
-
-
-                if started and (now - last_partial_time) > 0.8:
-                    if not self.partial_transcribing and len(all_audio) > sr * 0.5:
-                        self.partial_transcribing = True
-                        last_partial_time = now
-                        audio_snapshot = np.copy(all_audio)
-                        threading.Thread(
-                            target=self._run_partial_transcription,
-                            args=(audio_snapshot, sr),
-                            daemon=True
-                        ).start()
-
-            self.recording_active = False
             capture.stop()
-
-            if self.cancelled:
-                _debug_log("DictateThread cancelada pelo usuário (configurações abertas). Abortando.")
-                return
-
-            final_audio = capture.get_audio_float32()
-            if len(final_audio) > 0:
-                all_audio = np.concatenate([all_audio, final_audio])
-
-
-            if started and len(all_audio) > sr * 0.3:
-                duration = len(all_audio) / sr
-                GLib.idle_add(self.overlay.update_status, "Transcrevendo...", "status-transcribing")
-                _debug_log(f"Áudio capturado: {duration:.1f}s, {len(all_audio)} samples")
-
-
-                try:
-                    with wave.open(LAST_WAV, "wb") as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(sr)
-                        wf.writeframes((all_audio * 32767).astype(np.int16).tobytes())
-                except OSError:
-                    pass
-
-                raw_text = self.transcriber.transcribe_file(LAST_WAV)
-
-                if raw_text:
-                    result = pipeline.process(
-                        self.config, raw_text, wm_class=self.wm_class, forced_mode=self.mode,
-                        on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
-                    final_text = result.text
-                    _debug_log(f"Texto: {raw_text!r} -> {final_text!r}")
-                    GLib.idle_add(self.overlay.update_text, final_text, True)
-                    paste_text(final_text, active_win, result.config.get("paste_method", "ctrl+v"))
-                    self.pasted = True
-                    self._remember(raw_text, result)
-                    if result.ai_error:
-                        status = "Colado sem IA"
-                    elif result.mode:
-                        status = f"Colado · {result.mode['name']}"
-                    else:
-                        status = "Texto colado!"
-                    GLib.idle_add(self.overlay.update_status, status, "status-success")
-                else:
-                    audio_rms = float(np.sqrt(np.mean(all_audio**2)))
-                    _debug_log(f"Nenhuma fala reconhecida (RMS={audio_rms:.4f})")
-                    GLib.idle_add(self.overlay.update_status,
-                        "Nenhuma fala detectada", "status-error")
-            else:
-                if started:
-                    msg = "Áudio muito curto"
-                else:
-                    msg = "Microfone sem sinal" if peak_rms == 0.0 else "Nenhuma fala detectada"
-                    if peak_rms < threshold:
-                        # Nada chegou ao limiar: mute/ganho do Yeti explicam mais que "sem fala".
-                        msg = (yeti_hw_problem() if is_yeti(mic) else None) or msg
-                        _debug_log(f"Pico {peak_rms:.5f} < limiar {threshold:.5f} em {mic}")
-                _debug_log(msg)
-                GLib.idle_add(self.overlay.update_status, msg, "status-error")
-
             time.sleep(1.5)
             GLib.idle_add(self._cleanup_gtk)
 
@@ -300,6 +174,143 @@ class DictateThread(threading.Thread):
             self.restore_volume()
             if self.pasted:
                 play_sound(self.config, "done")
+
+    def _listen(self, capture, threshold, timeout, keys=None):
+        """Grava um trecho. Com keys (push-to-talk): do início até soltar a tecla.
+
+        Sem keys: espera a fala (SPEECH_START_TICKS acima do limiar) e para no silêncio.
+        Devolve (áudio, começou, pico de RMS).
+        """
+        sr = self.config["sample_rate"]
+        silence_needed = int(self.config["silence_duration"] / TICK_INTERVAL)
+        recording_start = time.time()
+        started = keys is not None
+        all_audio = capture.take_pre_buffer_clear_live() if started else np.array([], dtype=np.float32)
+        speech_confirm_ticks = 0
+        silence_counter = 0
+        released_ticks = 0
+        peak_rms = 0.0
+        last_partial_time = time.time()
+        self.recording_active = True
+
+        while not self.cancelled:
+            time.sleep(TICK_INTERVAL)
+            rms = capture.get_rms()
+            peak_rms = max(peak_rms, rms)
+            GLib.idle_add(self.overlay.update_level, rms, threshold)
+            if self.overlay.wants_spectrum:
+                GLib.idle_add(self.overlay.update_spectrum, spectrum_bands(capture.recent_samples(), sr))
+            now = time.time()
+
+            if keys is not None:
+                released_ticks = 0 if keys.held() else released_ticks + 1
+                if released_ticks >= 2:  # 100 ms solta: evita repique da tecla
+                    _debug_log(f"Push-to-talk: tecla solta após {now - recording_start:.1f}s")
+                    break
+            elif rms > threshold:
+                speech_confirm_ticks += 1
+                if not started and speech_confirm_ticks >= SPEECH_START_TICKS:
+                    started = True
+                    GLib.idle_add(self.overlay.update_status, "Ouvindo...", "status-listening")
+                    pre_audio = capture.take_pre_buffer_clear_live()
+                    if len(pre_audio) > 0:
+                        all_audio = np.concatenate([all_audio, pre_audio])
+                if started and speech_confirm_ticks >= SPEECH_START_TICKS:
+                    silence_counter = 0
+            else:
+                speech_confirm_ticks = 0
+                if started:
+                    silence_counter += 1
+
+            if keys is None:
+                if not started and (now - recording_start) > timeout:
+                    _debug_log(f"Timeout: {timeout}s sem fala")
+                    break
+                if started and silence_counter >= silence_needed:
+                    _debug_log(f"Silêncio detectado após {now - recording_start:.1f}s")
+                    break
+
+            if started:
+                chunk = capture.get_audio_float32()
+                if len(chunk) > 0:
+                    all_audio = np.concatenate([all_audio, chunk])
+            else:
+                capture.discard_live_buffer()
+
+            if len(all_audio) > sr * self.config["max_duration"]:
+                _debug_log(f"Limite máximo atingido: {self.config['max_duration']}s")
+                break
+
+            if started and (now - last_partial_time) > 0.8:
+                if not self.partial_transcribing and len(all_audio) > sr * 0.5:
+                    self.partial_transcribing = True
+                    last_partial_time = now
+                    threading.Thread(target=self._run_partial_transcription,
+                                     args=(np.copy(all_audio), sr), daemon=True).start()
+
+        self.recording_active = False
+        final_audio = capture.get_audio_float32() if started else np.array([], dtype=np.float32)
+        if len(final_audio) > 0:
+            all_audio = np.concatenate([all_audio, final_audio])
+        return all_audio, started, peak_rms
+
+    def _finish_segment(self, all_audio, started, peak_rms, threshold, mic, sr, handsfree):
+        """Transcreve, processa e cola um trecho. Devolve True se a frase de parada foi dita."""
+        if not (started and len(all_audio) > sr * 0.3):
+            if started:
+                msg = "Áudio muito curto"
+            else:
+                msg = "Microfone sem sinal" if peak_rms == 0.0 else "Nenhuma fala detectada"
+                if peak_rms < threshold:
+                    # Nada chegou ao limiar: mute/ganho do Yeti explicam mais que "sem fala".
+                    msg = (yeti_hw_problem() if is_yeti(mic) else None) or msg
+                    _debug_log(f"Pico {peak_rms:.5f} < limiar {threshold:.5f} em {mic}")
+            _debug_log(msg)
+            GLib.idle_add(self.overlay.update_status, msg, "status-error")
+            return False
+
+        GLib.idle_add(self.overlay.update_status, "Transcrevendo...", "status-transcribing")
+        _debug_log(f"Áudio capturado: {len(all_audio) / sr:.1f}s, {len(all_audio)} samples")
+        try:
+            with wave.open(LAST_WAV, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sr)
+                wf.writeframes((all_audio * 32767).astype(np.int16).tobytes())
+        except OSError:
+            pass
+
+        raw_text = self.transcriber.transcribe_file(LAST_WAV)
+        stop = False
+        if handsfree and raw_text:
+            raw_text, stop = ptt.strip_stop_phrase(raw_text, self.config.get("handsfree_stop_phrase", ""))
+            if stop:
+                _debug_log("Mãos livres: frase de parada")
+        if not raw_text:
+            if not stop:
+                _debug_log(f"Nenhuma fala reconhecida (RMS={float(np.sqrt(np.mean(all_audio ** 2))):.4f})")
+                GLib.idle_add(self.overlay.update_status, "Nenhuma fala detectada", "status-error")
+            return stop
+
+        result = pipeline.process(
+            self.config, raw_text, wm_class=self.wm_class, forced_mode=self.mode,
+            on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+        final_text = result.text
+        if handsfree and self.pasted:
+            final_text = " " + final_text  # trechos seguidos não grudam
+        _debug_log(f"Texto: {raw_text!r} -> {final_text!r}")
+        GLib.idle_add(self.overlay.update_text, final_text.strip(), True)
+        paste_text(final_text, self.active_win, result.config.get("paste_method", "ctrl+v"))
+        self.pasted = True
+        self._remember(raw_text, result)
+        if result.ai_error:
+            status = "Colado sem IA"
+        elif result.mode:
+            status = f"Colado · {result.mode['name']}"
+        else:
+            status = "Texto colado!"
+        GLib.idle_add(self.overlay.update_status, status, "status-success")
+        return stop
 
     def restore_volume(self):
         vol, self.original_volume = self.original_volume, None
