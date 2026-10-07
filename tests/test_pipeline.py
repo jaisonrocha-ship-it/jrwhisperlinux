@@ -78,7 +78,7 @@ def test_mode_priority():
 def test_ai_pipeline_with_fake_server():
     server = HTTPServer(("127.0.0.1", 0), FakeNIM)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    ai.NIM_URL = f"http://127.0.0.1:{server.server_port}"
+    ai.CLOUD["nvidia"] = (f"http://127.0.0.1:{server.server_port}", *ai.CLOUD["nvidia"][1:])  # nunca a NVIDIA real
     try:
         FakeNIM.reply = "<think>pensando…</think>Olá João,\n\nPodemos remarcar?\n\nAtenciosamente,"
         r = pipeline.process(CFG, "Modo e-mail, oi joão podemos remarcar", wm_class="firefox")
