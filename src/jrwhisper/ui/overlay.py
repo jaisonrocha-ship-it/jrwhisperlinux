@@ -131,6 +131,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.dictate_thread = None
         self.on_handoff = None   # chamado quando a engrenagem transforma o processo em Ajustes
         self._last_frame = None
+        self._fade = (None, None)   # (opacidade alvo, callback ao chegar)
         self.choices = None      # (modos, selecionado, callback) enquanto espera a escolha
         self.choices_busy = False
         self._chip_rects = []    # [(x, y, w, h, ação)] do último desenho; palavra: ("word", início, fim)
@@ -362,31 +363,33 @@ class WhisperFlowOverlay(Gtk.Window):
         self.box_h += (self._target_box_h() - self.box_h) * k
         if self.captions:
             self.capview.advance(dt)
+        self._step_fade(dt)
         self.queue_draw()
         return True
 
-    def fade_in(self):
-        self._fade_val = 0.0
+    # Fade no relógio de quadros (165 Hz sem degraus), curva de saída: rápido no começo, assenta suave.
+    def _step_fade(self, dt):
+        target, done = self._fade
+        if target is None:
+            return
+        op = self.get_opacity()
+        # sair é mais rápido (~0,16 s): até o processo fechar, um 2º toque no atalho cai nele
+        op += (target - op) * (1 - math.exp(-dt * (16 if target else 24)))
+        if abs(target - op) < 0.02:
+            op, self._fade = target, (None, None)
+            if done:
+                done()
+        self.set_opacity(op)
 
-        def _step():
-            if self._fade_val < 1.0:
-                self._fade_val += 0.10
-                self.set_opacity(min(self._fade_val, 1.0))
-                return True
-            return False
-        GLib.timeout_add(14, _step)
+    def fade_in(self):
+        self._fade = (1.0, None)
 
     def fade_out(self, callback):
-        self._fade_val = self.get_opacity()
-
-        def _step():
-            if self._fade_val > 0.0:
-                self._fade_val -= 0.10
-                self.set_opacity(max(self._fade_val, 0.0))
-                return True
+        if not self.get_mapped():  # sem quadros (janela oculta): não há o que animar
+            self.set_opacity(0.0)
             callback()
-            return False
-        GLib.timeout_add(14, _step)
+            return
+        self._fade = (0.0, callback)
 
     # ── API do DictateThread ───────────────────────────────────────
     def update_level(self, rms, threshold):

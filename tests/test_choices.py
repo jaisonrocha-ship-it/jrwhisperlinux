@@ -174,6 +174,25 @@ def test_overlay_word_edit():
     o.destroy()
 
 
+def test_overlay_fade_on_frame_clock():
+    from jrwhisper.ui.overlay import WhisperFlowOverlay
+    o = WhisperFlowOverlay(dict(DEFAULT_CONFIG))
+    for hz in (60, 165):  # mesma duração em qualquer monitor: ~0,25 s até assentar
+        o.set_opacity(0.0); o.fade_in()
+        frames = 0
+        while o._fade[0] is not None:
+            o._step_fade(1 / hz); frames += 1
+        assert o.get_opacity() == 1.0 and 0.15 < frames / hz < 0.35, (hz, frames)
+    done = []
+    o.fade_out(lambda: done.append(1))  # janela oculta (nunca mapeada): sem quadros, conclui na hora
+    assert done == [1] and o.get_opacity() == 0.0
+    o._fade = (0.0, lambda: done.append(2)); o.set_opacity(1.0)
+    for _ in range(200):
+        o._step_fade(1 / 165)
+    assert done == [1, 2]  # callback uma vez só
+    o.destroy()
+
+
 def test_overlay_keys_and_scroll():
     import cairo
     from gi.repository import Gdk
@@ -246,7 +265,7 @@ def run_tests():
     for fn in (test_original_then_paste, test_copy_and_discard_do_not_paste, test_send_pastes_then_presses_send_key,
                test_raw_is_pure_whisper_output, test_continue_appends_and_redoes_mode,
                test_pause_counts_only_real_silence, test_edited_word_is_pasted,
-               test_overlay_word_edit, test_overlay_keys_and_scroll, test_hotkey_second_press):
+               test_overlay_word_edit, test_overlay_fade_on_frame_clock, test_overlay_keys_and_scroll, test_hotkey_second_press):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
