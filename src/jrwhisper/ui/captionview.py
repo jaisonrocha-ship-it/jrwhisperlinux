@@ -15,7 +15,7 @@ import time
 import cairo
 from gi.repository import GLib, Pango, PangoCairo
 
-from .visuals import rounded_rect
+from .visuals import CARD, CARD_ALPHA, rounded_rect
 
 LENS_POS = {"top": 0.35, "center": 0.5, "bottom": 0.65}
 RESUME_SECS = 8   # relendo e parado este tempo: volta ao vivo
@@ -84,7 +84,7 @@ class CaptionView:
 
     def draw(self, cr, x, y, w, h, a=1.0):
         rounded_rect(cr, x, y, w, h, 16 * self.scale)
-        cr.set_source_rgba(0.09, 0.09, 0.11, 0.86 * a)
+        cr.set_source_rgba(*CARD, CARD_ALPHA * a)
         cr.fill_preserve()
         cr.set_source_rgba(1, 1, 1, 0.08 * a)
         cr.set_line_width(1)
@@ -171,8 +171,8 @@ class CaptionView:
             edges.append((y + h, top + inner - self.line_h * 1.2))
         for start, end in edges:
             g = cairo.LinearGradient(0, start, 0, end)
-            g.add_color_stop_rgba(0, 0.09, 0.09, 0.11, 0.86 * a)
-            g.add_color_stop_rgba(1, 0.09, 0.09, 0.11, 0.0)
+            g.add_color_stop_rgba(0, *CARD, CARD_ALPHA * a)
+            g.add_color_stop_rgba(1, *CARD, 0.0)
             cr.rectangle(x, min(start, end), w, abs(end - start))
             cr.set_source(g)
             cr.fill()

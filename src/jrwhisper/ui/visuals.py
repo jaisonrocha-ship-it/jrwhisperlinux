@@ -11,6 +11,10 @@ import numpy as np
 from .theme import accent_pair, draw_icon, hex_to_rgb
 
 SIZE_SCALE = {"s": 0.8, "m": 1.0, "l": 1.25}
+# Superfície de vidro escuro de tudo que o overlay desenha (caixa de texto, legendas, pílula, status):
+# um tom só, opaco o bastante para o texto de trás não atravessar a leitura em fundo claro.
+CARD = (0.09, 0.09, 0.11)
+CARD_ALPHA = 0.92
 
 # estado → cores (início, fim) quando não seguem o acento
 STATE_COLORS = {
@@ -384,7 +388,7 @@ class BarsVisual(Visual):
 
 def _pill(cr, x, y, w, h):
     rounded_rect(cr, x, y, w, h, h / 2)
-    cr.set_source_rgba(0.09, 0.09, 0.11, 0.84)
+    cr.set_source_rgba(*CARD, CARD_ALPHA)
     cr.fill_preserve()
     hl = cairo.LinearGradient(0, y, 0, y + h)
     hl.add_color_stop_rgba(0, 1, 1, 1, 0.14)

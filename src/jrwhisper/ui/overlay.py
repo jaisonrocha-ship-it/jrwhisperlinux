@@ -17,7 +17,7 @@ from .. import learning
 from ..config import _debug_log, load_config
 from .theme import draw_icon
 from .captionview import CaptionView
-from .visuals import make_visual, rounded_rect
+from .visuals import CARD, CARD_ALPHA, make_visual, rounded_rect
 
 # classe CSS antiga (vinda do DictateThread) → estado do visual
 STATES = {
@@ -553,7 +553,7 @@ class WhisperFlowOverlay(Gtk.Window):
             px, py = 9 * self.scale, 3 * self.scale
             # pílula escura: legível sobre qualquer coisa atrás
             rounded_rect(cr, self.cx - w / 2 - px, self.status_y - py, w + 2 * px, h + 2 * py, (h + 2 * py) / 2)
-            cr.set_source_rgba(0.09, 0.09, 0.11, 0.78)
+            cr.set_source_rgba(*CARD, CARD_ALPHA)
             cr.fill()
             cr.move_to(self.cx - w / 2, self.status_y)
             cr.set_source_rgba(1, 1, 1, 0.78)
@@ -561,7 +561,11 @@ class WhisperFlowOverlay(Gtk.Window):
 
         # engrenagem discreta
         gx, gy, gw, gh = self.gear
-        draw_icon(cr, "settings", gx + gw / 2, gy + gh / 2, 15 * self.scale, (1, 1, 1, 0.35), 1.8)
+        # engrenagem discreta, mas com disco de vidro: não some sobre fundo claro
+        cr.arc(gx + gw / 2, gy + gh / 2, 12 * self.scale, 0, 2 * math.pi)
+        cr.set_source_rgba(*CARD, 0.55)
+        cr.fill()
+        draw_icon(cr, "settings", gx + gw / 2, gy + gh / 2, 15 * self.scale, (1, 1, 1, 0.6), 1.8)
 
         self._draw_text(cr)
         return False
@@ -591,7 +595,7 @@ class WhisperFlowOverlay(Gtk.Window):
         x = self.cx - bw / 2
         y = self.text_anchor - self.box_h if self.text_above else self.text_anchor
         rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
-        cr.set_source_rgba(0.09, 0.09, 0.11, 0.86 * a)
+        cr.set_source_rgba(*CARD, CARD_ALPHA * a)
         cr.fill_preserve()
         cr.set_source_rgba(1, 1, 1, 0.08 * a)
         cr.set_line_width(1)
