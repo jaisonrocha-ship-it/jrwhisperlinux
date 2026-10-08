@@ -93,6 +93,35 @@ Com a **reescrita por IA** ligada, o texto não é colado sozinho. Ele fica na t
 
 Com **Push-to-talk** ligado (X11), segure o atalho de ditado enquanto fala e solte para transcrever. Um toque rápido continua funcionando como antes.
 
+### Macropad (opcional)
+
+<p align="center"><img src="assets/macropad/preview.png" width="160" alt="Ícones das 6 teclas do macropad"></p>
+
+Um teclado macro de 6 teclas e 1 knob deixa cada função do ditado a um toque. O modelo usado é um **macropad genérico sem marca, com microcontrolador WCH CH57x** (6 teclas em 2×3 e um knob giratório com clique), vendido com nomes variados como "mini teclado macro 6 teclas 1 knob". Para saber se o seu é compatível, procure o ID `1189:8890` no `lsusb`. Os descritores USB dele vêm vazios e o ID aparece como "Acer" no registro de IDs, mas é só um ID reaproveitado por essas placas, não um produto Acer.
+
+| Tecla | Envia | Comando |
+|---|---|---|
+| 1 | F13 (`XF86Tools`) | `dictate` (ditar; de novo: encerra) |
+| 2 | F14 (`XF86Launch5`) | `dictate --mode email` |
+| 3 | F15 (`XF86Launch6`) | `dictate --system` (som do computador) |
+| 4 | F16 (`XF86Launch7`) | `dictate --captions` (legendas) |
+| 5 | F17 (`XF86Launch8`) | `dictate --history` (busca rápida) |
+| 6 | F18 (`XF86Launch9`) | `dictate --settings` |
+| Knob | volume − / + | aperto: Ctrl+F13 = ditar |
+
+As teclas F13–F18 não existem num teclado comum, então não brigam com atalho nenhum. O push-to-talk também funciona segurando a tecla 1.
+
+1. **Instale a ferramenta de gravação** ([ch57x-keyboard-tool](https://github.com/kriomant/ch57x-keyboard-tool), MIT/Apache-2.0):
+   ```bash
+   cargo install ch57x-keyboard-tool
+   ```
+2. **Grave o mapa no macropad.** O mapa fica no próprio dispositivo, então funciona em qualquer computador:
+   ```bash
+   sudo ~/.cargo/bin/ch57x-keyboard-tool upload < config/macropad.yaml
+   ```
+3. **Ligue cada tecla ao comando.** Em Configurações do sistema → Teclado → Atalhos → Atalhos personalizados, adicione a tecla do macropad como segundo atalho de cada item do `dictate`, ou crie os que faltam (e-mail, busca e Ajustes). Trocar o atalho principal nos Ajustes do ditado mantém as teclas do macropad.
+4. **Gravação a laser das teclas (opcional):** `assets/macropad/` traz os 6 ícones em SVG, em milímetros (tecla de 12×12 mm, ícone de 9 mm), com o traço já convertido em forma preenchida para o modo fill do laser.
+
 ### Revisão com IA
 
 | Tecla | Ação |

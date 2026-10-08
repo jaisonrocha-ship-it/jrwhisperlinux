@@ -45,6 +45,7 @@
 | dconf | LGPL 2.1+ | LGPL-2.1-or-later |
 | Docker Engine *(opcional, IA local)* | Apache 2.0 | Apache-2.0 |
 | Ollama *(opcional, imagem `ollama/ollama`)* | MIT | MIT |
+| ch57x-keyboard-tool *(opcional, macropad)* | MIT ou Apache 2.0 | MIT OR Apache-2.0 |
 
 ## Modelos de Rede Neural
 

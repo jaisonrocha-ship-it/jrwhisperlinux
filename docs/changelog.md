@@ -35,6 +35,7 @@
 * **Ollama próprio do ditado** (`jrwhisper-ollama`, porta 11435, GPU, sobe no boot com o Docker): o ditado usava o Ollama que veio com o Moorcheh (memória do Hermes), e um `moorcheh down` levava a IA local e o tradutor das legendas junto. Reaproveita os modelos já baixados.
 
 ### Instalação
+* **Macropad (opcional):** um teclado macro genérico de 6 teclas + knob (WCH CH57x, USB `1189:8890`, sem marca) vira painel do ditado: ditar, e-mail, som do computador, legendas, busca e Ajustes, com o knob no volume e o aperto ditando. Mapa em `config/macropad.yaml` (gravado no dispositivo com `ch57x-keyboard-tool`), push-to-talk segurando a tecla e ícones das teclas para gravação a laser em `assets/macropad/`. Passo a passo no README.
 * **O comando `dictate` sobrevive a mover ou renomear o repositório:** era um symlink, e mover a pasta quebrava atalhos, menu e o serviço. Agora é um lançador que guarda o caminho e, se ele sumir, procura em `~` e se corrige; sem repositório, avisa na tela.
 * O instalador passa a instalar `gir1.2-rsvg-2.0` e `gir1.2-atspi-2.0` (ícones e contexto do campo); numa instalação limpa, os Ajustes e o overlay quebravam.
 
