@@ -708,18 +708,18 @@ class SettingsWindow(Gtk.Window):
         t.choice_row(lb, "Ordem", None, AI_CHAINS, ",".join(self.config.get("ai_chain") or [self.config["ai_provider"]]),
                      set_chain)
         from .. import ai
+        provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
+            "ai_ollama_url", "http://localhost:11434"))
+        provider_rows["ollama_model"] = t.row(lb, "Modelo local (Ollama)", "1º da fila: grátis e nada sai do computador.", self._entry("ai_ollama_model", "qwen2.5"))
         provider_rows["nvidia_key"] = self._key_row(lb, "nvidia", "NVIDIA", "nvapi-…")
         provider_rows["nvidia_model"] = t.choice_row(
-            lb, "Modelo", "Testados com a sua chave; os mais rápidos deixam o ditado fluido.", ai.RECOMMENDED,
+            lb, "Modelo da NVIDIA", "Testados com a sua chave; os mais rápidos deixam o ditado fluido.", ai.RECOMMENDED,
             self.config.get("ai_model"), lambda v: self.set("ai_model", v)).get_ancestor(Gtk.ListBoxRow)
         provider_rows["deepseek_key"] = self._key_row(lb, "deepseek", "DeepSeek", "sk-…")
         provider_rows["deepseek_model"] = t.choice_row(
-            lb, "Modelo", "Flash é o rápido (~0,8 s, sem raciocínio); Pro pensa mais e demora.", ai.DEEPSEEK_MODELS,
+            lb, "Modelo da DeepSeek", "Flash é o rápido (~0,8 s, sem raciocínio); Pro pensa mais e demora.", ai.DEEPSEEK_MODELS,
             self.config.get("ai_deepseek_model", "deepseek-flash"),
             lambda v: self.set("ai_deepseek_model", v)).get_ancestor(Gtk.ListBoxRow)
-        provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
-            "ai_ollama_url", "http://localhost:11434"))
-        provider_rows["ollama_model"] = t.row(lb, "Modelo do Ollama", None, self._entry("ai_ollama_model", "qwen2.5"))
         test_label = t.label("", "row-subtitle")
         tb = Gtk.Box(spacing=10)
         tb.pack_start(test_label, False, False, 0)
@@ -739,6 +739,8 @@ class SettingsWindow(Gtk.Window):
                      opts, self.config.get("ai_default_mode", ""), lambda v: self.set("ai_default_mode", v))
         t.switch_row(lb2, "Ativar por voz", "Diga “modo <nome>” no começo: “modo e-mail, preciso remarcar…”.",
                      self.config.get("ai_voice_prefix", True), lambda v: self.set("ai_voice_prefix", v))
+        self._style_group(content)
+
         lb3 = t.group(content, "Contexto")
         t.switch_row(lb3, "Usar o campo em foco", "App, janela, rótulo do campo e o texto selecionado (a maior pista "
                      "do assunto) ajudam a IA com nomes e termos; nomes próprios também vão para o reconhecimento. "
@@ -749,6 +751,105 @@ class SettingsWindow(Gtk.Window):
                                    "mostra “via NVIDIA/DeepSeek” quando isso acontece.",
                                    "group-footer", wrap=True), False, False, 0)
         return root
+
+    def _style_group(self, box):
+        """Meu estilo: nota no Obsidian estudada dos seus textos enviados; usada nos modos de e-mail."""
+        from .. import style
+        lb = t.group(box, "Meu estilo", "Os modos de e-mail escrevem como você: regras da nota “Meu estilo de "
+                                        "escrita” (edite à vontade no Obsidian) e as suas últimas correções. O estudo "
+                                        "roda na IA local; os e-mails não saem do computador.")
+        t.switch_row(lb, "Usar meu estilo nos e-mails", None, self.config.get("style_enabled", True),
+                     lambda v: self.set("style_enabled", v))
+        open_btn = Gtk.Button(label="Abrir")
+        open_btn.connect("clicked", lambda _b: subprocess.Popen(
+            ["xdg-open", self.config["style_note"]]) if os.path.exists(self.config.get("style_note", "")) else None)
+        t.row(lb, "Nota", self._short_path(self.config.get("style_note")) or "Nenhuma", open_btn)
+
+        src_lb = t.group(box, "Fontes do estilo", "Pastas do vault com textos seus. “Só enviados” lê exports de "
+                                                  "e-mail (linha “Pasta:” com enviados); “nota inteira” serve para "
+                                                  "posts e artigos seus.")
+        status = t.label("", "row-subtitle")
+
+        def save_sources():
+            self.set("style_sources", copy.deepcopy(self.config["style_sources"]))
+
+        def refresh():
+            for r in src_lb.get_children():
+                src_lb.remove(r)
+            for src in self.config.get("style_sources", []):
+                sw = Gtk.Switch(active=src.get("enabled", True), valign=Gtk.Align.CENTER)
+                sw.connect("notify::active", lambda w, _p, src=src: (src.update(enabled=w.get_active()), save_sources()))
+                rm = Gtk.Button()
+                rm.add(t.icon("trash", 14, "#98989D"))
+                rm.get_style_context().add_class("btn-flat")
+                rm.set_tooltip_text("Remover fonte")
+                rm.connect("clicked", lambda _b, src=src: (self.config["style_sources"].remove(src), save_sources(),
+                                                            refresh()))
+                ctl = Gtk.Box(spacing=8)
+                ctl.pack_start(sw, False, False, 0)
+                ctl.pack_start(rm, False, False, 0)
+                kind = "só enviados" if src.get("filter", "sent") == "sent" else "nota inteira"
+                row = t.row(src_lb, os.path.basename(src["path"].rstrip("/")), f"{kind} · contando…", ctl)
+                count_source(src, row)
+            src_lb.show_all()
+
+        def count_source(src, row):
+            def work():
+                n, words = next(((n, w) for _s, n, w in style.preview([dict(src, enabled=True)])), (0, 0))
+                kind = "só enviados" if src.get("filter", "sent") == "sent" else "nota inteira"
+                sub = f"{kind} · {n} textos · {words:,} palavras".replace(",", ".")
+                GLib.idle_add(lambda: row.subtitle.set_text(sub) and False)
+            threading.Thread(target=work, daemon=True).start()
+
+        def add_source(_b):
+            dlg = Gtk.FileChooserDialog(title="Pasta com textos seus", transient_for=self,
+                                        action=Gtk.FileChooserAction.SELECT_FOLDER)
+            dlg.add_buttons("Cancelar", Gtk.ResponseType.CANCEL, "Escolher", Gtk.ResponseType.OK)
+            vault = os.path.dirname(os.path.dirname(self.config.get("style_note") or "")) or os.path.expanduser("~")
+            dlg.set_current_folder(vault)
+            path = dlg.get_filename() if dlg.run() == Gtk.ResponseType.OK else None
+            dlg.destroy()
+            if not path:
+                return
+
+            def build(b):
+                combo = t.choice_row(t.group(b), "Ler", None, [("sent", "Só e-mails enviados"),
+                                                               ("whole", "Nota inteira")], "sent", lambda v: None)
+                return lambda: combo.get_active_id()
+            kind = self._dialog(os.path.basename(path), build, "Adicionar")
+            if kind:
+                self.config.setdefault("style_sources", []).append(
+                    {"path": path, "filter": kind, "subdirs": True, "enabled": True})
+                save_sources()
+                refresh()
+
+        def restudy(btn):
+            btn.set_sensitive(False)
+
+            def progress(msg):
+                GLib.idle_add(status.set_text, msg)
+
+            def work():
+                t0 = time.time()
+                try:
+                    block = style.study(self.config, self.config.get("style_sources", []), progress)
+                    style.write_note(self.config["style_note"], block)
+                    msg = f"Estilo atualizado em {time.time() - t0:.0f} s"
+                except Exception as e:
+                    msg = f"Falhou: {str(e)[:70]}"
+                GLib.idle_add(lambda: (status.set_text(msg), btn.set_sensitive(True)) and False)
+            threading.Thread(target=work, daemon=True).start()
+
+        refresh()
+        add = Gtk.Button(label="Adicionar pasta…")
+        add.connect("clicked", add_source)
+        study = Gtk.Button(label="Reestudar meu estilo")
+        study.get_style_context().add_class("btn-primary")
+        study.connect("clicked", restudy)
+        bar = Gtk.Box(spacing=10)
+        for w in (add, study, status):
+            bar.pack_start(w, False, False, 0)
+        box.pack_start(bar, False, False, 0)
 
     def _entry(self, key, placeholder):
         e = Gtk.Entry(text=self.config.get(key) or "", placeholder_text=placeholder)
@@ -784,7 +885,7 @@ class SettingsWindow(Gtk.Window):
                 key_label.set_text(secrets.masked(key))
         change.connect("clicked", change_key)
         kb.pack_start(change, False, False, 0)
-        return t.row(lb, "Chave de API", "Guardada no chaveiro do sistema (gnome-keyring).", kb)
+        return t.row(lb, f"Chave da {name}", "Guardada no chaveiro do sistema (gnome-keyring).", kb)
 
     def _test_ai(self, label):
         label.set_text("Testando…")

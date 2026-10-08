@@ -92,7 +92,8 @@ def _strip_reasoning(text):
     return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip().strip('"“”').strip()
 
 
-def complete(config, instruction, text, timeout=None, system=SYSTEM):
+def complete(config, instruction, text, timeout=None, system=SYSTEM, options=None, fmt=None):
+    """fmt="json": o Ollama garante JSON válido (modelo pequeno não segue formato livre)."""
     timeout = timeout or float(config.get("ai_timeout", 8.0))
     messages = [{"role": "system", "content": f"{system}\n\nInstrução: {instruction}"},
                 {"role": "user", "content": text}]
@@ -100,8 +101,10 @@ def complete(config, instruction, text, timeout=None, system=SYSTEM):
         provider = config.get("ai_provider", "nvidia")
         if provider == "ollama":
             r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
-                              json={"model": config.get("ai_ollama_model", "llama3.2"), "messages": messages,
-                                    "stream": False, "options": {"temperature": 0.2}}, timeout=timeout)
+                              json={"model": config.get("ai_ollama_model", "qwen2.5"), "messages": messages,
+                                    "stream": False, "options": {"temperature": 0.2, **(options or {})},
+                                    **({"format": fmt} if fmt else {})},
+                              timeout=timeout)
             r.raise_for_status()
             out = r.json()["message"]["content"]
         else:
@@ -228,7 +231,7 @@ NAMES = {"ollama": "local", "nvidia": "NVIDIA", "deepseek": "DeepSeek"}
 last_provider = None  # quem respondeu a última reescrita (o status mostra quando foi a nuvem)
 
 
-def rewrite(config, text, mode, context=None):
+def rewrite(config, text, mode, context=None, style=None):
     """Texto reescrito pelo modo, tentando a fila de IAs (ai_chain) em ordem; levanta AIError se todas
     falharem (quem chama cola o original). Grátis e rápidas primeiro: local → NVIDIA → DeepSeek."""
     global last_provider
@@ -238,6 +241,8 @@ def rewrite(config, text, mode, context=None):
     if context:
         body = f"<contexto>\n{context}\n</contexto>\n{body}"
         system = f"{SYSTEM} {CONTEXT_RULE}"
+    if style:  # e-mail: escreva como o usuário escreve (nota "Meu estilo de escrita" + correções anteriores)
+        system = f"{system}\n\nEscreva no estilo do usuário, descrito abaixo. O conteúdo vem só do ditado.\n{style}"
     deadline = time.time() + float(config.get("ai_timeout", 8.0))
     errors = []
     for i, provider in enumerate(chain):

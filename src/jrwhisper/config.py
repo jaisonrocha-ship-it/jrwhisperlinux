@@ -89,6 +89,10 @@ DEFAULT_CONFIG = {
     "ai_voice_prefix": True,
     # Contexto do campo em foco (app, janela, rótulo, texto selecionado) para a IA e nomes para o Whisper
     "context_enabled": True,
+    # Meu estilo (e-mails): nota no Obsidian, estudada dos e-mails enviados das pastas abaixo
+    "style_enabled": True,
+    "style_note": "",
+    "style_sources": [],             # [{"path", "filter": "sent" | "whole", "subdirs", "enabled"}]
     "ai_timeout": 8.0,
     "ai_modes": [
         {"id": "corrigir", "name": "Corrigir", "enabled": True,

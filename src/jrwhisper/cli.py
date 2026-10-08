@@ -9,6 +9,7 @@ USO:
   dictate --system              → Transcreve o som do computador (vídeo, reunião) e cola; de novo: encerra
   dictate --captions            → Legendas ao vivo do som do computador, traduzidas; de novo: encerra
   dictate --history             → Busca rápida no histórico (Enter cola)
+  dictate --study-style         → Estuda seus e-mails enviados (fontes do estilo) e escreve "Meu estilo de escrita"
   dictate --calibrate           → Mede ruído e voz, diagnostica o mic e salva o limiar
   dictate --calibrate-gui       → Mesma calibração em janela, com medidor ao vivo
   dictate --daemon              → Serviço que mantém o modelo carregado
@@ -139,6 +140,20 @@ def main():
         from .ui.history_search import HistorySearch
         HistorySearch(config).show_all()
         Gtk.main()
+    elif arg == "--study-style":
+        from . import ai, style
+        if not config.get("style_note") or not config.get("style_sources"):
+            print("Defina a nota e as fontes em Ajustes → Inteligência → Meu estilo.", file=sys.stderr)
+            sys.exit(2)
+        for src, n, words in style.preview(config["style_sources"]):
+            print(f"  {src['path']}: {n} textos, {words} palavras")
+        t0 = time.time()
+        try:
+            block = style.study(config, config["style_sources"], on_progress=lambda m: print(f"  {m}…", flush=True))
+        except ai.AIError as e:
+            print(f"Falhou: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Nota: {style.write_note(config['style_note'], block)} ({time.time() - t0:.0f} s)")
     elif arg == "--daemon":
         run_daemon(config)
     elif arg == "--status":
