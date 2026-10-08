@@ -94,6 +94,25 @@ class Visual:
         kc = 1 - math.exp(-dt * 6)
         self.colors = (_lerp(self.colors[0], tc[0], kc), _lerp(self.colors[1], tc[1], kc))
 
+    def gradient_faded(self, x0, x1, alpha=1.0):
+        """Horizontal início → fim, com as pontas transparentes: a luz some antes da borda."""
+        g = cairo.LinearGradient(x0, 0, x1, 0)
+        c0, c1 = self.colors
+        g.add_color_stop_rgba(0.0, *c0, 0.0)
+        g.add_color_stop_rgba(0.18, *c0, alpha * 0.8)
+        g.add_color_stop_rgba(0.5, *_lerp(c0, c1, 0.5), alpha)
+        g.add_color_stop_rgba(0.82, *c1, alpha)
+        g.add_color_stop_rgba(1.0, *c1, 0.0)
+        return g
+
+    def gradient_mirrored(self, x0, x1):
+        """Centro na cor inicial, as duas pontas na final: barras espelhadas com cor simétrica."""
+        g = cairo.LinearGradient(x0, 0, x1, 0)
+        c0, c1 = self.colors
+        for stop, c in ((0.0, c1), (0.5, c0), (1.0, c1)):
+            g.add_color_stop_rgba(stop, *c, 1.0)
+        return g
+
     def gradient(self, x0, y0, x1, y1, alpha=1.0, a0=0.6):
         g = cairo.LinearGradient(x0, y0, x1, y1)
         c0, c1 = self.colors
@@ -233,17 +252,37 @@ class OrbVisual(Visual):
 
 
 class WaveVisual(Visual):
-    """Pílula com ondas fluidas (referência: ondas estilo Siri)."""
+    """Pílula com fitas de luz: cada fita segue uma faixa do espectro (graves embaixo, agudos em cima)
+    e as pontas somem no escuro. Sem espectro (prévia dos Ajustes), seguem o nível."""
     W, H = 380, 64
-    WAVES = (  # freq, fase, amplitude relativa, alfa
-        (0.016, 0.0, 1.0, 0.95),
-        (0.024, 1.9, 0.7, 0.6),
-        (0.011, -1.3, 0.55, 0.45),
-        (0.032, 3.1, 0.35, 0.35),
+    WAVES = (  # freq, fase, faixa do espectro (início, fim de 32), alfa
+        (0.016, 0.0, (0, 8), 0.95),
+        (0.024, 1.9, (8, 16), 0.65),
+        (0.011, -1.3, (16, 24), 0.5),
+        (0.032, 3.1, (24, 32), 0.4),
     )
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.bands = None
+        self.amps = np.zeros(len(self.WAVES))
 
     def size(self):
         return self.W * self.scale, self.H * self.scale
+
+    def set_bands(self, bands):
+        self.bands = np.asarray(bands, dtype=float)
+
+    def advance(self, dt):
+        super().advance(dt)
+        lv = self.level ** 0.75
+        if self.bands is not None and len(self.bands) >= 32 and self.state == "listening":
+            # faixa forte = fita alta; o nível geral segura o conjunto (silêncio não vira ruído)
+            target = np.array([self.bands[a:b].mean() for _f, _p, (a, b), _a in self.WAVES]) ** 1.5 * (0.4 + 0.6 * lv) * 1.6
+        else:
+            target = np.full(len(self.WAVES), lv) * np.array([1.0, 0.7, 0.55, 0.35])
+        k_up, k_down = 1 - math.exp(-dt * 20), 1 - math.exp(-dt * 7)
+        self.amps += (np.clip(target, 0, 1) - self.amps) * np.where(target > self.amps, k_up, k_down)
 
     def draw(self, cr, cx, cy):
         w, h = self.size()
@@ -254,44 +293,45 @@ class WaveVisual(Visual):
         cr.clip()
         speed = 0 if self.reduce_motion else (5.5 if self.state == "transcribing" else 3.2)
         floor = 0.22 if self.state == "transcribing" else 0.07
-        amp = h * 0.40 * max(self.level ** 0.75, floor)
         pad = h * 0.45
         span = w - 2 * pad
+        step = 4
+        xs = np.arange(0, span + step, step)
+        env = np.sin(np.pi * np.clip(xs / span, 0, 1)) ** 1.6
         cr.set_operator(cairo.OPERATOR_ADD)
-        for n, (freq, phase, rel, alpha) in enumerate(self.WAVES):
-            path = []
-            for i in range(0, int(span) + 1, 3):
-                env = math.sin(math.pi * i / span) ** 1.6
-                y = cy + amp * rel * env * math.sin(i * freq / self.scale + self.t * speed * (1 + 0.15 * n) + phase)
-                path.append((x0 + pad + i, y))
-
-            def trace():
-                cr.move_to(*path[0])
-                for p in path[1:]:
-                    cr.line_to(*p)
-            trace()
-            cr.line_to(path[-1][0], cy)
-            cr.line_to(path[0][0], cy)
+        for n, (freq, phase, _band, alpha) in enumerate(self.WAVES):
+            amp = h * 0.42 * max(self.amps[n], floor * (1.0 - 0.15 * n))
+            ys = cy + amp * env * np.sin(xs * freq / self.scale + self.t * speed * (1 + 0.15 * n) + phase)
+            cr.move_to(x0 + pad, ys[0])
+            for x, y in zip(xs[1:], ys[1:]):
+                cr.line_to(x0 + pad + x, y)
+            path = cr.copy_path()
+            cr.line_to(x0 + pad + span, cy)
+            cr.line_to(x0 + pad, cy)
             cr.close_path()
-            cr.set_source(self.gradient(x0, 0, x0 + w, 0, alpha=alpha * 0.22, a0=0.7))
+            cr.set_source(self.gradient_faded(x0 + pad, x0 + w - pad, alpha * 0.20))
             cr.fill()
-            for width, a in ((6.0, 0.18), (1.8, 1.0)):  # brilho largo + linha nítida
-                trace()
+            for width, a in ((6.0, 0.20), (1.6, 1.0)):  # brilho largo + fio nítido
+                cr.append_path(path)
                 cr.set_line_width(width * self.scale)
-                cr.set_source(self.gradient(x0, 0, x0 + w, 0, alpha=alpha * a, a0=0.75))
+                cr.set_source(self.gradient_faded(x0 + pad, x0 + w - pad, alpha * a))
                 cr.stroke()
         cr.restore()
 
 
 class BarsVisual(Visual):
-    """Pílula com barras de espectro e reflexo (referência: barras ciano → azul)."""
+    """Pílula com barras espelhadas (estilo Gravador de Voz): graves no centro, agudos para as pontas,
+    crescendo para cima e para baixo da linha média; o pico de cada barra cai devagar."""
     W, H = 380, 64
-    N = 32
+    N = 32          # bandas recebidas
+    SIDE = 16       # barras de cada lado do centro
 
     def __init__(self, config):
         super().__init__(config)
         self.bands = np.zeros(self.N)
-        self.shown = np.zeros(self.N)
+        self.shown = np.zeros(self.SIDE)
+        self.peaks = np.zeros(self.SIDE)
+        self.peak_v = np.zeros(self.SIDE)
 
     def size(self):
         return self.W * self.scale, self.H * self.scale
@@ -301,40 +341,45 @@ class BarsVisual(Visual):
 
     def advance(self, dt):
         super().advance(dt)
-        target = self.bands
+        b = np.zeros(self.N)
+        b[: len(self.bands)] = self.bands
+        target = b.reshape(self.SIDE, -1).max(axis=1)  # 32 bandas → 16 (pares)
         if self.state == "transcribing" and not self.reduce_motion:
-            i = np.arange(self.N)
-            target = 0.25 + 0.2 * np.sin(i * 0.5 - self.t * 6)  # varredura enquanto transcreve
+            i = np.arange(self.SIDE)
+            target = 0.22 + 0.18 * np.sin(i * 0.6 - self.t * 6)  # varredura do centro para fora
         up = target > self.shown
-        k_up, k_down = 1 - math.exp(-dt * 30), 1 - math.exp(-dt * 6)
+        k_up, k_down = 1 - math.exp(-dt * 30), 1 - math.exp(-dt * 8)
         self.shown += (target - self.shown) * np.where(up, k_up, k_down)
+        # pico: sobe junto, segura e cai com gravidade
+        hit = self.shown >= self.peaks
+        self.peak_v = np.where(hit, 0.0, self.peak_v + 2.2 * dt)
+        self.peaks = np.where(hit, self.shown, np.maximum(self.shown, self.peaks - self.peak_v * dt))
 
     def draw(self, cr, cx, cy):
         w, h = self.size()
         x0, y0 = cx - w / 2, cy - h / 2
         _pill(cr, x0, y0, w, h)
         pad = h * 0.45
-        span = w - 2 * pad
-        gap = span / self.N
-        bw = gap * 0.62
-        base = y0 + h * 0.66
-        max_h = h * 0.50
-        grad = self.gradient(x0 + pad, 0, x0 + w - pad, 0, alpha=1.0, a0=0.95)
-        for i, v in enumerate(self.shown):
-            bh = max(2.0 * self.scale, v * max_h)
-            x = x0 + pad + i * gap + (gap - bw) / 2
-            rounded_rect(cr, x, base - bh, bw, bh, bw / 2)
-            cr.set_source(grad)
-            cr.fill()
-            # reflexo: espelhado, curto e desvanecendo
-            rh = bh * 0.38
-            refl = cairo.LinearGradient(0, base + 1, 0, base + 1 + rh)
-            c = _lerp(self.colors[0], self.colors[1], i / self.N)
-            refl.add_color_stop_rgba(0, *c, 0.32)
-            refl.add_color_stop_rgba(1, *c, 0.0)
-            cr.rectangle(x, base + 1.5 * self.scale, bw, rh)
-            cr.set_source(refl)
-            cr.fill()
+        gap = (w / 2 - pad) / self.SIDE
+        bw = gap * 0.58
+        max_h = h * 0.36           # meia altura: cresce para os dois lados da linha média
+        grad = self.gradient_mirrored(x0 + pad, x0 + w - pad)
+        s = self.scale
+        show_peaks = self.state == "listening"
+        for i in range(self.SIDE):
+            v, pk = self.shown[i], self.peaks[i]
+            bh = max(1.5 * s, v * max_h)
+            for side in (-1, 1):  # centro = graves; espelhado para as duas pontas
+                x = cx + side * (i * gap + gap / 2) - bw / 2
+                rounded_rect(cr, x, cy - bh, bw, 2 * bh, bw / 2)
+                cr.set_source(grad)
+                cr.fill()
+                if show_peaks and pk > v + 0.04:  # marcador do pico, acima e abaixo
+                    py = pk * max_h + 2.5 * s
+                    cr.set_source_rgba(1, 1, 1, 0.55 * min(1.0, (pk - v) * 6))
+                    for yy in (cy - py - 1.2 * s, cy + py - 0.8 * s):
+                        rounded_rect(cr, x, yy, bw, 2 * s, s)
+                        cr.fill()
 
 
 def _pill(cr, x, y, w, h):

@@ -71,7 +71,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.set_app_paintable(True)
 
         self.visual = make_visual(config)
-        self.wants_spectrum = config.get("overlay_style") == "bars"
+        self.wants_spectrum = config.get("overlay_style") in ("bars", "waves")
         self.show_text = bool(config.get("overlay_show_text", True))
         # legendas: mais linhas e cartão mais largo (ditado: 3 linhas que acompanham o fim)
         self.max_lines = int(config.get("overlay_lines", self.MAX_LINES))

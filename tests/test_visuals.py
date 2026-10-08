@@ -76,9 +76,34 @@ def test_orb_is_glass_and_reacts():
     assert body(loud) > 1.4 * body(quiet), (body(loud), body(quiet))  # voz forte: esfera bem maior
 
 
+def _pill_alpha(style, bands):
+    v = make_visual({"overlay_style": style, "reduce_motion": True})
+    v.set_state("listening"); v.set_level(0.9); v.set_bands(bands)
+    for _ in range(60):
+        v.advance(1 / 60)
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 400, 100)
+    v.draw(cairo.Context(surf), 200, 50)
+    surf.flush()
+    a = np.frombuffer(bytes(surf.get_data()), np.uint8).reshape(100, 400, 4)
+    return a, v
+
+
+def test_bars_mirrored_and_waves_fade_out():
+    img, _ = _pill_alpha("bars", np.linspace(1, 0, 32))       # graves fortes, agudos fracos
+    lit = img[..., :3].max(axis=2).astype(int)
+    assert np.abs(lit[:, :200] - lit[:, 200:][:, ::-1]).mean() < 4  # espelhada: esquerda = direita
+    height = lambda x0, x1: int((lit[:, x0:x1] > 100).any(axis=1).sum())
+    assert height(190, 210) > 2 * height(45, 70)               # graves no centro, mais altos
+    img, v = _pill_alpha("waves", np.full(32, 0.8))
+    w, h = v.size(); pad = h * 0.45
+    x_end, x_mid = int(200 - w / 2 + pad + 2), 200
+    glow = lambda x: int(img[30:70, x - 2:x + 3, :3].max())
+    assert glow(x_end) < 0.25 * glow(x_mid), (glow(x_end), glow(x_mid))  # a luz some antes da borda
+
+
 def run_tests():
     failed = False
-    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp, test_orb_is_glass_and_reacts):
+    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp, test_orb_is_glass_and_reacts, test_bars_mirrored_and_waves_fade_out):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
