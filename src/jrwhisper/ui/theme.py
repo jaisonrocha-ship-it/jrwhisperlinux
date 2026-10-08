@@ -6,8 +6,12 @@ helpers; o overlay usa só ACCENTS/accent_pair (desenha com Cairo).
 import math
 import os
 
+import functools
+
 import cairo
-from gi.repository import GObject, Gtk, Gdk, GdkPixbuf
+import gi
+gi.require_version("Rsvg", "2.0")
+from gi.repository import GObject, Gtk, Gdk, GdkPixbuf, Pango, Rsvg
 
 from ..config import load_config
 
@@ -64,6 +68,8 @@ CSS_TEMPLATE = """
 @define-color text #F5F5F7;
 @define-color text2 #98989D;
 @define-color hairline rgba(255, 255, 255, 0.07);
+/* o tema do sistema (MacTahoe) pinta placeholder de laranja; aqui segue o cinza secundário */
+@define-color placeholder_text_color #7C7C82;
 
 window {{
     background-color: @bg;
@@ -268,22 +274,61 @@ def _svg_pixbuf(svg, size):
     return loader.get_pixbuf()
 
 
+def _icon_svg(name, color, stroke):
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" '
+            f'stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+
+
 def icon_pixbuf(name, size, color="#F5F5F7", stroke=2.0):
-    """Ícone Lucide como pixbuf (o overlay desenha em Cairo; as janelas usam icon())."""
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" '
-           f'stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
-    return _svg_pixbuf(svg, size)
+    """Ícone Lucide como pixbuf (para quem precisa de imagem; o overlay usa draw_icon, vetorial)."""
+    return _svg_pixbuf(_icon_svg(name, color, stroke), size)
+
+
+@functools.lru_cache(maxsize=64)
+def _icon_handle(name, stroke):
+    return Rsvg.Handle.new_from_data(_icon_svg(name, "#FFFFFF", stroke).encode())
+
+
+@functools.lru_cache(maxsize=64)
+def _icon_mask(name, stroke, px):
+    """Máscara A8 do ícone com `px` pixels de dispositivo, renderizada do vetor uma vez só."""
+    surf = cairo.ImageSurface(cairo.FORMAT_A8, px, px)
+    vp = Rsvg.Rectangle()
+    vp.x, vp.y, vp.width, vp.height = 0, 0, px, px
+    _icon_handle(name, stroke).render_document(cairo.Context(surf), vp)
+    return surf
+
+
+def draw_icon(cr, name, cx, cy, size, rgba=(1, 1, 1, 1), stroke=2.0):
+    """Ícone Lucide centrado em (cx, cy), nítido: o vetor é rasterizado no tamanho exato em pixels do
+    dispositivo (2× em HiDPI) e colado alinhado ao pixel. Por quadro custa só uma máscara."""
+    ds = cr.get_target().get_device_scale()[0] or 1
+    px = max(1, round(size * ds))
+    mask = _icon_mask(name, stroke, px)
+    ux, uy = cr.user_to_device(cx - px / ds / 2, cy - px / ds / 2)
+    x, y = cr.device_to_user(round(ux), round(uy))  # canto no pixel inteiro: sem borrão de reamostragem
+    cr.save()
+    cr.translate(x, y)
+    cr.scale(1 / ds, 1 / ds)
+    cr.set_source_rgba(*rgba)
+    cr.mask_surface(mask, 0, 0)
+    cr.restore()
+
+
+def _scaled_image(pixbuf_at, size):
+    """Gtk.Image renderizado na escala do monitor (2× em HiDPI), não esticado."""
+    scale = Gdk.Screen.get_default().get_monitor_scale_factor(0) or 1
+    pb = pixbuf_at(size * scale)
+    return Gtk.Image.new_from_surface(Gdk.cairo_surface_create_from_pixbuf(pb, scale, None))
 
 
 def icon(name, size=16, color="#F5F5F7", stroke=2.0):
-    return Gtk.Image.new_from_pixbuf(icon_pixbuf(name, size, color, stroke))
+    return _scaled_image(lambda px: icon_pixbuf(name, px, color, stroke), size)
 
 
 def app_icon(size=32):
     """Ícone do app (o mesmo da dock), nítido em telas HiDPI."""
-    scale = Gdk.Screen.get_default().get_monitor_scale_factor(0) or 1
-    pb = GdkPixbuf.Pixbuf.new_from_file_at_size(APP_ICON, size * scale, size * scale)
-    return Gtk.Image.new_from_surface(Gdk.cairo_surface_create_from_pixbuf(pb, scale, None))
+    return _scaled_image(lambda px: GdkPixbuf.Pixbuf.new_from_file_at_size(APP_ICON, px, px), size)
 
 
 def tile_icon(name, color, size=22):
@@ -292,7 +337,7 @@ def tile_icon(name, color, size=22):
            f'<rect width="24" height="24" rx="6" fill="{color}"/>'
            f'<g transform="translate(5 5) scale(0.5833)" fill="none" stroke="#FFFFFF" stroke-width="2.3" '
            f'stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</g></svg>')
-    return Gtk.Image.new_from_pixbuf(_svg_pixbuf(svg, size))
+    return _scaled_image(lambda px: _svg_pixbuf(svg, px), size)
 
 
 # ── Componentes de página (inset grouped) ──────────────────────────
@@ -350,7 +395,10 @@ def row(lb, title, subtitle=None, control=None):
     h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
     texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
     texts.set_valign(Gtk.Align.CENTER)
-    texts.pack_start(label(title, "row-title"), False, False, 0)
+    r.title = label(title, "row-title")
+    # título longo (ex.: um ditado no histórico) termina em "…" em vez de alargar a janela toda
+    r.title.set_ellipsize(Pango.EllipsizeMode.END)
+    texts.pack_start(r.title, False, False, 0)
     if subtitle:
         r.subtitle = label(subtitle, "row-subtitle", wrap=True)
         texts.pack_start(r.subtitle, False, False, 0)
@@ -439,12 +487,28 @@ def choice_row(lb, title, subtitle, options, active_id, on_change):
     return combo
 
 
+def num(value, digits=1):
+    """Número como se escreve em português: vírgula decimal ("0,0029", "1,5")."""
+    return f"{value:.{digits}f}".replace(".", ",")
+
+
+def when_text(date):
+    """Data salva como "AAAA-MM-DD HH:MM" no mesmo rótulo do histórico: "Hoje 13:35", "07/10 13:35"."""
+    import time
+    from .. import history
+    try:
+        return history.when(time.mktime(time.strptime(date, "%Y-%m-%d %H:%M")))
+    except (TypeError, ValueError):
+        return date or ""
+
+
 def slider_row(lb, title, subtitle, lo, hi, step, value, fmt, on_change, width=200):
     box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
     scale.set_draw_value(False)
     scale.set_value(value)
     scale.set_size_request(width, -1)
+    fmt = (lambda f: lambda v: f(v).replace(".", ","))(fmt)  # vírgula decimal em todo valor de ajuste
     val = label(fmt(value), "dim", xalign=1.0)
     val.set_width_chars(6)
 

@@ -15,9 +15,9 @@ from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 from .. import learning
 from ..config import _debug_log, load_config
-from .theme import icon_pixbuf
+from .theme import draw_icon
 from .captionview import CaptionView
-from .visuals import make_visual, rounded_rect
+from .visuals import CARD, CARD_ALPHA, card, make_visual, rounded_rect
 
 # classe CSS antiga (vinda do DictateThread) → estado do visual
 STATES = {
@@ -71,7 +71,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.set_app_paintable(True)
 
         self.visual = make_visual(config)
-        self.wants_spectrum = config.get("overlay_style") == "bars"
+        self.wants_spectrum = config.get("overlay_style") in ("bars", "waves")
         self.show_text = bool(config.get("overlay_show_text", True))
         # legendas: mais linhas e cartão mais largo (ditado: 3 linhas que acompanham o fim)
         self.max_lines = int(config.get("overlay_lines", self.MAX_LINES))
@@ -120,7 +120,6 @@ class WhisperFlowOverlay(Gtk.Window):
         else:
             gx, gy = self.cx + self.vw / 2 + 6 * s, self.cy - 8 * s
         self.gear = (int(gx), int(gy), int(16 * s) + 6, int(16 * s) + 6)
-        self.gear_icon = icon_pixbuf("settings", int(15 * s), "#FFFFFF", 1.8)
 
         self.status = "Iniciando…"
         self.text = ""
@@ -131,6 +130,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.dictate_thread = None
         self.on_handoff = None   # chamado quando a engrenagem transforma o processo em Ajustes
         self._last_frame = None
+        self._fade = (None, None)   # (opacidade alvo, callback ao chegar)
         self.choices = None      # (modos, selecionado, callback) enquanto espera a escolha
         self.choices_busy = False
         self._chip_rects = []    # [(x, y, w, h, ação)] do último desenho; palavra: ("word", início, fim)
@@ -362,31 +362,33 @@ class WhisperFlowOverlay(Gtk.Window):
         self.box_h += (self._target_box_h() - self.box_h) * k
         if self.captions:
             self.capview.advance(dt)
+        self._step_fade(dt)
         self.queue_draw()
         return True
 
-    def fade_in(self):
-        self._fade_val = 0.0
+    # Fade no relógio de quadros (165 Hz sem degraus), curva de saída: rápido no começo, assenta suave.
+    def _step_fade(self, dt):
+        target, done = self._fade
+        if target is None:
+            return
+        op = self.get_opacity()
+        # sair é mais rápido (~0,16 s): até o processo fechar, um 2º toque no atalho cai nele
+        op += (target - op) * (1 - math.exp(-dt * (16 if target else 24)))
+        if abs(target - op) < 0.02:
+            op, self._fade = target, (None, None)
+            if done:
+                done()
+        self.set_opacity(op)
 
-        def _step():
-            if self._fade_val < 1.0:
-                self._fade_val += 0.10
-                self.set_opacity(min(self._fade_val, 1.0))
-                return True
-            return False
-        GLib.timeout_add(14, _step)
+    def fade_in(self):
+        self._fade = (1.0, None)
 
     def fade_out(self, callback):
-        self._fade_val = self.get_opacity()
-
-        def _step():
-            if self._fade_val > 0.0:
-                self._fade_val -= 0.10
-                self.set_opacity(max(self._fade_val, 0.0))
-                return True
+        if not self.get_mapped():  # sem quadros (janela oculta): não há o que animar
+            self.set_opacity(0.0)
             callback()
-            return False
-        GLib.timeout_add(14, _step)
+            return
+        self._fade = (0.0, callback)
 
     # ── API do DictateThread ───────────────────────────────────────
     def update_level(self, rms, threshold):
@@ -458,7 +460,8 @@ class WhisperFlowOverlay(Gtk.Window):
         """Linhas do texto quebrado pelo Pango (quebra real): as últimas ao ditar, a janela rolável na revisão."""
         if not self.text:
             return []
-        layout = self._layout(cr, self.text, self.font_px, width=self.text_w - 2 * self.text_pad)
+        dots = 0 if self.choices else 26 * self.scale  # espaço dos pontinhos: nunca colam no texto
+        layout = self._layout(cr, self.text, self.font_px, width=self.text_w - 2 * self.text_pad - dots)
         raw = self.text.encode()
         lines = []  # (linha, posição do 1º caractere em self.text): a edição troca a palavra no texto todo
         for ln in layout.get_lines_readonly():
@@ -551,7 +554,7 @@ class WhisperFlowOverlay(Gtk.Window):
             px, py = 9 * self.scale, 3 * self.scale
             # pílula escura: legível sobre qualquer coisa atrás
             rounded_rect(cr, self.cx - w / 2 - px, self.status_y - py, w + 2 * px, h + 2 * py, (h + 2 * py) / 2)
-            cr.set_source_rgba(0.09, 0.09, 0.11, 0.78)
+            cr.set_source_rgba(*CARD, CARD_ALPHA)
             cr.fill()
             cr.move_to(self.cx - w / 2, self.status_y)
             cr.set_source_rgba(1, 1, 1, 0.78)
@@ -559,8 +562,11 @@ class WhisperFlowOverlay(Gtk.Window):
 
         # engrenagem discreta
         gx, gy, gw, gh = self.gear
-        Gdk.cairo_set_source_pixbuf(cr, self.gear_icon, gx + 3, gy + 3)
-        cr.paint_with_alpha(0.35)
+        # engrenagem discreta, mas com disco de vidro: não some sobre fundo claro
+        cr.arc(gx + gw / 2, gy + gh / 2, 12 * self.scale, 0, 2 * math.pi)
+        cr.set_source_rgba(*CARD, 0.55)
+        cr.fill()
+        draw_icon(cr, "settings", gx + gw / 2, gy + gh / 2, 15 * self.scale, (1, 1, 1, 0.6), 1.8)
 
         self._draw_text(cr)
         return False
@@ -589,17 +595,16 @@ class WhisperFlowOverlay(Gtk.Window):
         bw = self.text_w
         x = self.cx - bw / 2
         y = self.text_anchor - self.box_h if self.text_above else self.text_anchor
-        rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
-        cr.set_source_rgba(0.09, 0.09, 0.11, 0.86 * a)
-        cr.fill_preserve()
-        cr.set_source_rgba(1, 1, 1, 0.08 * a)
-        cr.set_line_width(1)
-        cr.stroke()
+        card(cr, x, y, bw, self.box_h, 16 * self.scale, a)
+        cr.new_path()
 
         cr.save()
         rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
         cr.clip()
         n = len(lines)
+        # feedback de trabalho: pontinhos no fim enquanto o texto é parcial; brilho passando ao transcrever / IA
+        pending = bool(lines) and not self.final and not self.choices
+        processing = (pending and self.visual.state == "transcribing") or self.choices_busy
         # linhas antigas esmaecem; a atual é branca (parcial um pouco mais suave)
         alphas = [0.38, 0.62, 1.0][-n:] if n <= 3 else [0.5 + 0.5 * i / (n - 1) for i in range(n)]
         if self.choices:
@@ -613,6 +618,8 @@ class WhisperFlowOverlay(Gtk.Window):
             w, h = lay.get_pixel_size()
             # legenda (várias linhas de texto corrido) lê melhor alinhada à esquerda
             lx = x + self.text_pad if self.max_lines > self.MAX_LINES and not self.choices else self.cx - w / 2
+            if current and pending and lx != x + self.text_pad:
+                lx -= 11 * self.scale  # linha + pontinhos centralizados juntos
             if self.choices:  # cada palavra vira alvo de clique para edição
                 remembered = {c["new"] for _i, c in self._visible_corrections() if c["remember"]}
                 for m in re.finditer(r"\S+", line):
@@ -637,6 +644,12 @@ class WhisperFlowOverlay(Gtk.Window):
             cr.move_to(lx, ty + (self.line_h - h) / 2)
             cr.set_source_rgba(1, 1, 1, a * la * (1.0 if (self.final or not current) else 0.85))
             PangoCairo.show_layout(cr, lay)
+            if processing:  # brilho que passa: o texto ainda está sendo trabalhado
+                cr.move_to(lx, ty + (self.line_h - h) / 2)
+                cr.set_source(self._shimmer(x, bw, a * la))
+                PangoCairo.show_layout(cr, lay)
+            if current and pending:
+                self._typing_dots(cr, min(lx + w + 7 * self.scale, x + bw - 26 * self.scale), ty + self.line_h / 2, a)
             ty += self.line_h
         if self.choices:  # setinhas: há texto acima/abaixo (roda do mouse rola)
             top = y + self.text_pad + (self.box_h - chips_h - 2 * self.text_pad - self.line_h * n) / 2
@@ -654,6 +667,25 @@ class WhisperFlowOverlay(Gtk.Window):
         box = [(x, y, bw, self.box_h, "box")] if self.choices else []
         self._set_chip_rects(box + word_rects + chip_rects)
         cr.restore()
+
+    def _typing_dots(self, cr, x, cy, a):
+        """Três pontinhos em onda (estilo "digitando…"): sobem e acendem um depois do outro."""
+        s, t = self.scale, self.visual.t
+        for i in range(3):
+            wave = 0.0 if self.visual.reduce_motion else max(0.0, math.sin(t * 6.0 - i * 0.9))
+            cr.arc(x + i * 7 * s, cy - 1.6 * s * wave, 2.1 * s, 0, 2 * math.pi)
+            cr.set_source_rgba(1, 1, 1, a * (0.35 + 0.55 * wave))
+            cr.fill()
+
+    def _shimmer(self, x, bw, a):
+        """Faixa de luz atravessando o cartão a cada ~1,4 s (desenhada por cima do texto)."""
+        span = bw + 240 * self.scale
+        cx = x - 120 * self.scale + (0 if self.visual.reduce_motion else (self.visual.t * 0.75 % 1.0) * span)
+        g = cairo.LinearGradient(cx - 60 * self.scale, 0, cx + 60 * self.scale, 0)
+        g.add_color_stop_rgba(0, *self.visual.accent[1], 0)
+        g.add_color_stop_rgba(0.5, 1, 1, 1, 0.75 * a)
+        g.add_color_stop_rgba(1, *self.visual.accent[0], 0)
+        return g
 
     def _draw_chips(self, cr, rows, top, a):
         rects = []

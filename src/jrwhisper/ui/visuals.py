@@ -8,11 +8,13 @@ import math
 
 import cairo
 import numpy as np
-from gi.repository import Gdk
-
-from .theme import accent_pair, hex_to_rgb, icon_pixbuf
+from .theme import accent_pair, draw_icon, hex_to_rgb
 
 SIZE_SCALE = {"s": 0.8, "m": 1.0, "l": 1.25}
+# Superfície de vidro escuro de tudo que o overlay desenha (caixa de texto, legendas, pílula, status):
+# um tom só, opaco o bastante para o texto de trás não atravessar a leitura em fundo claro.
+CARD = (0.09, 0.09, 0.11)
+CARD_ALPHA = 0.97
 
 # estado → cores (início, fim) quando não seguem o acento
 STATE_COLORS = {
@@ -96,6 +98,25 @@ class Visual:
         kc = 1 - math.exp(-dt * 6)
         self.colors = (_lerp(self.colors[0], tc[0], kc), _lerp(self.colors[1], tc[1], kc))
 
+    def gradient_faded(self, x0, x1, alpha=1.0):
+        """Horizontal início → fim, com as pontas transparentes: a luz some antes da borda."""
+        g = cairo.LinearGradient(x0, 0, x1, 0)
+        c0, c1 = self.colors
+        g.add_color_stop_rgba(0.0, *c0, 0.0)
+        g.add_color_stop_rgba(0.18, *c0, alpha * 0.8)
+        g.add_color_stop_rgba(0.5, *_lerp(c0, c1, 0.5), alpha)
+        g.add_color_stop_rgba(0.82, *c1, alpha)
+        g.add_color_stop_rgba(1.0, *c1, 0.0)
+        return g
+
+    def gradient_mirrored(self, x0, x1):
+        """Centro na cor inicial, as duas pontas na final: barras espelhadas com cor simétrica."""
+        g = cairo.LinearGradient(x0, 0, x1, 0)
+        c0, c1 = self.colors
+        for stop, c in ((0.0, c1), (0.5, c0), (1.0, c1)):
+            g.add_color_stop_rgba(stop, *c, 1.0)
+        return g
+
     def gradient(self, x0, y0, x1, y1, alpha=1.0, a0=0.6):
         g = cairo.LinearGradient(x0, y0, x1, y1)
         c0, c1 = self.colors
@@ -121,7 +142,6 @@ class OrbVisual(Visual):
     def __init__(self, config):
         super().__init__(config)
         self.angle = 0.0   # fase do plasma
-        self.mic = icon_pixbuf("mic", int(34 * self.scale), "#FFFFFF", 1.8)
 
     def size(self):
         d = (self.RING + 2 * self.PAD) * self.scale
@@ -135,9 +155,9 @@ class OrbVisual(Visual):
                  "calibrating": 0.5, "error": 0.2}.get(self.state, 0.4)
         self.angle += speed * dt
 
-    def _membrane(self, cr, cx, cy, r):
+    def _membrane(self, cr, cx, cy, r, lv):
         """Contorno ondulado: soma de senos no ângulo, amplitude segue a voz."""
-        p, amp = self.angle, 0.018 + 0.07 * self.level
+        p, amp = self.angle, 0.018 + 0.11 * lv
         n = 72
         for i in range(n + 1):
             th = 2 * math.pi * i / n
@@ -149,42 +169,37 @@ class OrbVisual(Visual):
         cr.close_path()
 
     def draw(self, cr, cx, cy):
+        """Vidro luminoso: corpo translúcido (a tela aparece atrás), plasma por dentro e borda de luz.
+        A voz (curva perceptual: fala baixa já mexe) cresce a esfera até +25%, acende o núcleo e a borda."""
         s = self.scale
+        lv = self.level ** 0.7
         breathe = 0 if self.reduce_motion else 0.018 * math.sin(self.t * 2.2)
         pulse = 0.0
         if self.state == "transcribing" and not self.reduce_motion:
             pulse = 0.5 + 0.5 * math.sin(self.t * 5.0)
-        r = self.RING / 2 * s * (1 + 0.10 * self.level + breathe)
+        r = self.RING / 2 * s * (1 + 0.25 * lv + breathe)
         c0, c1 = self.colors
         mid = _lerp(c0, c1, 0.5)
-        intensity = self.glow * (0.75 + 0.6 * self.level + 0.35 * pulse)
-
-        # fundo escuro: contraste sobre qualquer desktop (o brilho aditivo precisa dele)
-        halo = cairo.RadialGradient(cx, cy, r * 0.4, cx, cy, r * 1.7)
-        halo.add_color_stop_rgba(0, 0.07, 0.05, 0.20, 0.92)
-        halo.add_color_stop_rgba(0.55, 0.06, 0.04, 0.17, 0.72)
-        halo.add_color_stop_rgba(1, 0.05, 0.04, 0.15, 0.0)
-        cr.set_source(halo)
-        cr.arc(cx, cy, r * 1.7, 0, 2 * math.pi)
-        cr.fill()
+        intensity = self.glow * (0.7 + 0.9 * lv + 0.35 * pulse)
+        reach = min(r * 1.6, self.size()[0] / 2)  # o brilho não passa da área do visual
 
         cr.save()
-        cr.set_operator(cairo.OPERATOR_ADD)  # luz soma luz
-        glow = cairo.RadialGradient(cx, cy, r * 0.8, cx, cy, r * 1.65)
-        glow.add_color_stop_rgba(0, *mid, 0.40 * intensity)
-        glow.add_color_stop_rgba(0.35, *mid, 0.14 * intensity)
+        cr.set_operator(cairo.OPERATOR_ADD)  # luz soma luz; sem halo escuro (era mancha em fundo claro)
+        glow = cairo.RadialGradient(cx, cy, r * 0.85, cx, cy, reach)
+        glow.add_color_stop_rgba(0, *mid, 0.42 * intensity)
+        glow.add_color_stop_rgba(0.4, *mid, 0.12 * intensity)
         glow.add_color_stop_rgba(1, *mid, 0.0)
         cr.set_source(glow)
-        cr.arc(cx, cy, r * 1.65, 0, 2 * math.pi)
+        cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.fill()
         cr.restore()
 
-        # miolo sólido dentro da membrana: o desktop não aparece através da esfera
-        self._membrane(cr, cx, cy, r)
-        core = cairo.RadialGradient(cx, cy - r * 0.3, r * 0.1, cx, cy, r)
-        core.add_color_stop_rgba(0, 0.11, 0.08, 0.27, 0.97)
-        core.add_color_stop_rgba(1, 0.05, 0.03, 0.14, 0.97)
-        cr.set_source(core)
+        # corpo de vidro fumê: translúcido, mas escuro o bastante para o mic branco ler sobre qualquer fundo
+        self._membrane(cr, cx, cy, r, lv)
+        body = cairo.RadialGradient(cx, cy - r * 0.3, r * 0.1, cx, cy, r)
+        body.add_color_stop_rgba(0, 0.10, 0.07, 0.24, 0.50)
+        body.add_color_stop_rgba(1, 0.05, 0.03, 0.14, 0.62)
+        cr.set_source(body)
         cr.fill_preserve()
 
         cr.save()
@@ -194,62 +209,84 @@ class OrbVisual(Visual):
         for orbit, rad, vx, vy, ph, mix in self.BLOBS:
             bx = cx + r * orbit * math.cos(p * vx + ph)
             by = cy + r * orbit * math.sin(p * vy + ph)
-            br = r * rad * (1 + 0.25 * self.level)
+            br = r * rad * (1 + 0.4 * lv)
             c = _lerp(c0, c1, mix)
             g = cairo.RadialGradient(bx, by, 0, bx, by, br)
             g.add_color_stop_rgba(0, *c, 0.55 * intensity)
             g.add_color_stop_rgba(0.45, *c, 0.22 * intensity)
             g.add_color_stop_rgba(1, *c, 0.0)
             cr.set_source(g)
-            cr.paint()
-        # borda acesa (fresnel): a esfera brilha mais na beirada
-        rim = cairo.RadialGradient(cx, cy, r * 0.55, cx, cy, r * 1.08)
+            cr.arc(bx, by, br, 0, 2 * math.pi)  # só o disco da bolha, não a área toda
+            cr.fill()
+        # borda de luz (fresnel): mais forte e larga com a voz
+        rim = cairo.RadialGradient(cx, cy, r * (0.6 - 0.1 * lv), cx, cy, r * 1.08)
         rim.add_color_stop_rgba(0, *c1, 0.0)
-        rim.add_color_stop_rgba(0.7, *c1, 0.10 * intensity)
-        rim.add_color_stop_rgba(1, *_lerp(c1, (1, 1, 1), 0.35), 0.75 * intensity)
+        rim.add_color_stop_rgba(0.7, *c1, (0.10 + 0.12 * lv) * intensity)
+        rim.add_color_stop_rgba(1, *_lerp(c1, (1, 1, 1), 0.35 + 0.3 * lv), 0.8 * intensity)
         cr.set_source(rim)
-        cr.paint()
+        cr.arc(cx, cy, r * 1.08, 0, 2 * math.pi)
+        cr.fill()
         cr.restore()
 
         # reflexo de vidro no alto
         hx, hy = cx - r * 0.32, cy - r * 0.48
         spec = cairo.RadialGradient(hx, hy, 0, hx, hy, r * 0.42)
-        spec.add_color_stop_rgba(0, 1, 1, 1, 0.20)
+        spec.add_color_stop_rgba(0, 1, 1, 1, 0.22)
         spec.add_color_stop_rgba(1, 1, 1, 1, 0.0)
         cr.set_source(spec)
         cr.arc(hx, hy, r * 0.42, 0, 2 * math.pi)
         cr.fill()
 
-        # ícone central: check no sucesso, mic no resto
+        # ícone central: check no sucesso, mic no resto (sombra leve: lê sobre o plasma claro)
         if self.state == "success":
-            cr.set_source_rgba(1, 1, 1, 0.95)
-            cr.set_line_width(3.2 * s)
             cr.set_line_cap(cairo.LINE_CAP_ROUND)
             cr.set_line_join(cairo.LINE_JOIN_ROUND)
             k = 13 * s
-            cr.move_to(cx - k, cy + 0.5)
-            cr.line_to(cx - k * 0.3, cy + k * 0.65)
-            cr.line_to(cx + k, cy - k * 0.6)
-            cr.stroke()
+            for dy, rgba, width in ((1.2 * s, (0, 0, 0, 0.3), 4.4), (0, (1, 1, 1, 0.95), 3.2)):
+                cr.move_to(cx - k, cy + 0.5 + dy)
+                cr.line_to(cx - k * 0.3, cy + k * 0.65 + dy)
+                cr.line_to(cx + k, cy - k * 0.6 + dy)
+                cr.set_source_rgba(*rgba)
+                cr.set_line_width(width * s)
+                cr.stroke()
         else:
             alpha = 0.55 if self.state in ("transcribing", "calibrating") else 0.95
-            w, h = self.mic.get_width(), self.mic.get_height()
-            Gdk.cairo_set_source_pixbuf(cr, self.mic, cx - w / 2, cy - h / 2)
-            cr.paint_with_alpha(alpha)
+            draw_icon(cr, "mic", cx, cy + 1.2 * s, 34 * s, (0, 0, 0, 0.3 * alpha), 2.6)
+            draw_icon(cr, "mic", cx, cy, 34 * s, (1, 1, 1, alpha), 1.8)
 
 
 class WaveVisual(Visual):
-    """Pílula com ondas fluidas (referência: ondas estilo Siri)."""
+    """Pílula com fitas de luz: cada fita segue uma faixa do espectro (graves embaixo, agudos em cima)
+    e as pontas somem no escuro. Sem espectro (prévia dos Ajustes), seguem o nível."""
     W, H = 380, 64
-    WAVES = (  # freq, fase, amplitude relativa, alfa
-        (0.016, 0.0, 1.0, 0.95),
-        (0.024, 1.9, 0.7, 0.6),
-        (0.011, -1.3, 0.55, 0.45),
-        (0.032, 3.1, 0.35, 0.35),
+    WAVES = (  # freq, fase, faixa do espectro (início, fim de 32), alfa
+        (0.016, 0.0, (0, 8), 0.95),
+        (0.024, 1.9, (8, 16), 0.65),
+        (0.011, -1.3, (16, 24), 0.5),
+        (0.032, 3.1, (24, 32), 0.4),
     )
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.bands = None
+        self.amps = np.zeros(len(self.WAVES))
 
     def size(self):
         return self.W * self.scale, self.H * self.scale
+
+    def set_bands(self, bands):
+        self.bands = np.asarray(bands, dtype=float)
+
+    def advance(self, dt):
+        super().advance(dt)
+        lv = self.level ** 0.75
+        if self.bands is not None and len(self.bands) >= 32 and self.state == "listening":
+            # faixa forte = fita alta; o nível geral segura o conjunto (silêncio não vira ruído)
+            target = np.array([self.bands[a:b].mean() for _f, _p, (a, b), _a in self.WAVES]) ** 1.5 * (0.4 + 0.6 * lv) * 1.6
+        else:
+            target = np.full(len(self.WAVES), lv) * np.array([1.0, 0.7, 0.55, 0.35])
+        k_up, k_down = 1 - math.exp(-dt * 20), 1 - math.exp(-dt * 7)
+        self.amps += (np.clip(target, 0, 1) - self.amps) * np.where(target > self.amps, k_up, k_down)
 
     def draw(self, cr, cx, cy):
         w, h = self.size()
@@ -260,44 +297,45 @@ class WaveVisual(Visual):
         cr.clip()
         speed = 0 if self.reduce_motion else (5.5 if self.state == "transcribing" else 3.2)
         floor = 0.22 if self.state == "transcribing" else 0.07
-        amp = h * 0.40 * max(self.level ** 0.75, floor)
         pad = h * 0.45
         span = w - 2 * pad
+        step = 4
+        xs = np.arange(0, span + step, step)
+        env = np.sin(np.pi * np.clip(xs / span, 0, 1)) ** 1.6
         cr.set_operator(cairo.OPERATOR_ADD)
-        for n, (freq, phase, rel, alpha) in enumerate(self.WAVES):
-            path = []
-            for i in range(0, int(span) + 1, 3):
-                env = math.sin(math.pi * i / span) ** 1.6
-                y = cy + amp * rel * env * math.sin(i * freq / self.scale + self.t * speed * (1 + 0.15 * n) + phase)
-                path.append((x0 + pad + i, y))
-
-            def trace():
-                cr.move_to(*path[0])
-                for p in path[1:]:
-                    cr.line_to(*p)
-            trace()
-            cr.line_to(path[-1][0], cy)
-            cr.line_to(path[0][0], cy)
+        for n, (freq, phase, _band, alpha) in enumerate(self.WAVES):
+            amp = h * 0.42 * max(self.amps[n], floor * (1.0 - 0.15 * n))
+            ys = cy + amp * env * np.sin(xs * freq / self.scale + self.t * speed * (1 + 0.15 * n) + phase)
+            cr.move_to(x0 + pad, ys[0])
+            for x, y in zip(xs[1:], ys[1:]):
+                cr.line_to(x0 + pad + x, y)
+            path = cr.copy_path()
+            cr.line_to(x0 + pad + span, cy)
+            cr.line_to(x0 + pad, cy)
             cr.close_path()
-            cr.set_source(self.gradient(x0, 0, x0 + w, 0, alpha=alpha * 0.22, a0=0.7))
+            cr.set_source(self.gradient_faded(x0 + pad, x0 + w - pad, alpha * 0.20))
             cr.fill()
-            for width, a in ((6.0, 0.18), (1.8, 1.0)):  # brilho largo + linha nítida
-                trace()
+            for width, a in ((6.0, 0.20), (1.6, 1.0)):  # brilho largo + fio nítido
+                cr.append_path(path)
                 cr.set_line_width(width * self.scale)
-                cr.set_source(self.gradient(x0, 0, x0 + w, 0, alpha=alpha * a, a0=0.75))
+                cr.set_source(self.gradient_faded(x0 + pad, x0 + w - pad, alpha * a))
                 cr.stroke()
         cr.restore()
 
 
 class BarsVisual(Visual):
-    """Pílula com barras de espectro e reflexo (referência: barras ciano → azul)."""
+    """Pílula com barras espelhadas (estilo Gravador de Voz): graves no centro, agudos para as pontas,
+    crescendo para cima e para baixo da linha média; o pico de cada barra cai devagar."""
     W, H = 380, 64
-    N = 32
+    N = 32          # bandas recebidas
+    SIDE = 16       # barras de cada lado do centro
 
     def __init__(self, config):
         super().__init__(config)
         self.bands = np.zeros(self.N)
-        self.shown = np.zeros(self.N)
+        self.shown = np.zeros(self.SIDE)
+        self.peaks = np.zeros(self.SIDE)
+        self.peak_v = np.zeros(self.SIDE)
 
     def size(self):
         return self.W * self.scale, self.H * self.scale
@@ -307,53 +345,66 @@ class BarsVisual(Visual):
 
     def advance(self, dt):
         super().advance(dt)
-        target = self.bands
+        b = np.zeros(self.N)
+        b[: len(self.bands)] = self.bands
+        target = b.reshape(self.SIDE, -1).max(axis=1)  # 32 bandas → 16 (pares)
         if self.state == "transcribing" and not self.reduce_motion:
-            i = np.arange(self.N)
-            target = 0.25 + 0.2 * np.sin(i * 0.5 - self.t * 6)  # varredura enquanto transcreve
+            i = np.arange(self.SIDE)
+            target = 0.22 + 0.18 * np.sin(i * 0.6 - self.t * 6)  # varredura do centro para fora
         up = target > self.shown
-        k_up, k_down = 1 - math.exp(-dt * 30), 1 - math.exp(-dt * 6)
+        k_up, k_down = 1 - math.exp(-dt * 30), 1 - math.exp(-dt * 8)
         self.shown += (target - self.shown) * np.where(up, k_up, k_down)
+        # pico: sobe junto, segura e cai com gravidade
+        hit = self.shown >= self.peaks
+        self.peak_v = np.where(hit, 0.0, self.peak_v + 2.2 * dt)
+        self.peaks = np.where(hit, self.shown, np.maximum(self.shown, self.peaks - self.peak_v * dt))
 
     def draw(self, cr, cx, cy):
         w, h = self.size()
         x0, y0 = cx - w / 2, cy - h / 2
         _pill(cr, x0, y0, w, h)
         pad = h * 0.45
-        span = w - 2 * pad
-        gap = span / self.N
-        bw = gap * 0.62
-        base = y0 + h * 0.66
-        max_h = h * 0.50
-        grad = self.gradient(x0 + pad, 0, x0 + w - pad, 0, alpha=1.0, a0=0.95)
-        for i, v in enumerate(self.shown):
-            bh = max(2.0 * self.scale, v * max_h)
-            x = x0 + pad + i * gap + (gap - bw) / 2
-            rounded_rect(cr, x, base - bh, bw, bh, bw / 2)
-            cr.set_source(grad)
-            cr.fill()
-            # reflexo: espelhado, curto e desvanecendo
-            rh = bh * 0.38
-            refl = cairo.LinearGradient(0, base + 1, 0, base + 1 + rh)
-            c = _lerp(self.colors[0], self.colors[1], i / self.N)
-            refl.add_color_stop_rgba(0, *c, 0.32)
-            refl.add_color_stop_rgba(1, *c, 0.0)
-            cr.rectangle(x, base + 1.5 * self.scale, bw, rh)
-            cr.set_source(refl)
-            cr.fill()
+        gap = (w / 2 - pad) / self.SIDE
+        bw = gap * 0.58
+        max_h = h * 0.36           # meia altura: cresce para os dois lados da linha média
+        grad = self.gradient_mirrored(x0 + pad, x0 + w - pad)
+        s = self.scale
+        show_peaks = self.state == "listening"
+        peaks = []
+        for i in range(self.SIDE):  # todas as barras num caminho só: um preenchimento por quadro
+            v, pk = self.shown[i], self.peaks[i]
+            bh = max(1.5 * s, v * max_h)
+            for side in (-1, 1):  # centro = graves; espelhado para as duas pontas
+                x = cx + side * (i * gap + gap / 2) - bw / 2
+                rounded_rect(cr, x, cy - bh, bw, 2 * bh, bw / 2)
+                if show_peaks and pk > v + 0.04:
+                    peaks.append((x, pk * max_h + 2.5 * s))
+        cr.set_source(grad)
+        cr.fill()
+        for x, py in peaks:  # marcadores de pico, acima e abaixo, também num preenchimento
+            rounded_rect(cr, x, cy - py - 1.2 * s, bw, 2 * s, s)
+            rounded_rect(cr, x, cy + py - 0.8 * s, bw, 2 * s, s)
+        cr.set_source_rgba(1, 1, 1, 0.5)
+        cr.fill()
+
+
+def card(cr, x, y, w, h, r, a=1.0):
+    """Cartão de vidro do overlay: sombra curta (destaca sobre página escura e cheia de texto),
+    fundo CARD e borda fina. Deixa o contorno no path para quem quiser traçar por cima."""
+    rounded_rect(cr, x - 2.5, y - 0.5, w + 5, h + 5, r + 2.5)  # sombra curta: uma camada, barata
+    cr.set_source_rgba(0, 0, 0, 0.22 * a)
+    cr.fill()
+    rounded_rect(cr, x, y, w, h, r)
+    cr.set_source_rgba(*CARD, CARD_ALPHA * a)
+    cr.fill_preserve()
+    cr.set_source_rgba(1, 1, 1, 0.13 * a)
+    cr.set_line_width(1)
+    cr.stroke_preserve()
 
 
 def _pill(cr, x, y, w, h):
-    rounded_rect(cr, x, y, w, h, h / 2)
-    cr.set_source_rgba(0.09, 0.09, 0.11, 0.84)
-    cr.fill_preserve()
-    hl = cairo.LinearGradient(0, y, 0, y + h)
-    hl.add_color_stop_rgba(0, 1, 1, 1, 0.14)
-    hl.add_color_stop_rgba(0.5, 1, 1, 1, 0.03)
-    hl.add_color_stop_rgba(1, 1, 1, 1, 0.06)
-    cr.set_source(hl)
-    cr.set_line_width(1.0)
-    cr.stroke()
+    card(cr, x, y, w, h, h / 2)
+    cr.new_path()
 
 
 VISUALS = {"orb": OrbVisual, "waves": WaveVisual, "bars": BarsVisual}

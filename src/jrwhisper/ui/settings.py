@@ -18,7 +18,7 @@ from gi.repository import Gtk, Gdk, GLib
 
 from .. import history, shortcuts
 from ..audio import (SYSTEM_AUDIO, AudioCapture, calibration_state, default_source_name, friendly_mic_name,
-                     is_system_audio, list_source_names, resolve_mic, rms_db)
+                     is_system_audio, list_source_names, mic_options, resolve_mic, rms_db)
 from ..config import DEFAULT_CONFIG, OLLAMA_URL, RUNTIME_DIR, _debug_log, save_config
 from ..paste import copy_text
 from ..transcribe import is_daemon_running
@@ -524,7 +524,8 @@ class SettingsWindow(Gtk.Window):
                      "Se o microfone escolhido estiver desconectado, o ditado usa o padrão do sistema e avisa. "
                      "Som do computador transcreve o que está tocando (vídeo, reunião) direto da saída de áudio: "
                      "não para nas pausas, termina no 2º toque do atalho ou na duração máxima.")
-        options = [("@DEFAULT_SOURCE@", "Padrão do sistema")] + [(n, friendly_mic_name(n)) for n in list_source_names()]
+        options = [("@DEFAULT_SOURCE@", "Padrão do sistema")] + mic_options(list_source_names(),
+                                                                            self.config.get("mic_device"))
         options.append((SYSTEM_AUDIO, "Som do computador"))
         self.mic_combo = t.choice_row(lb, "Entrada", None, options,
                                       self.config.get("mic_device", "@DEFAULT_SOURCE@"), self._on_mic_changed)
@@ -573,7 +574,7 @@ class SettingsWindow(Gtk.Window):
             return
         state, cal = calibration_state(self.config, self._selected_mic())
         text, color = {
-            "ok": (f"Calibrado · limiar {cal['threshold']:.4f}" if cal else "", t.SUCCESS),
+            "ok": (f"Calibrado · limiar {t.num(cal['threshold'], 4)}" if cal else "", t.SUCCESS),
             "stale": ("Ganho do mic mudou: recalibre", t.WARNING),
             "none": ("Automático", "#98989D"),
         }[state]
@@ -636,15 +637,11 @@ class SettingsWindow(Gtk.Window):
             apply("caption_lens", on)
             for row in lens_rows:
                 row.set_sensitive(on)
-        t.switch_row(lb, "Efeito lente", "Linha em foco maior, as de cima e de baixo menores.",
+        t.switch_row(lb, "Frase em foco", "A frase mais nova fica maior e parada; as anteriores sobem menores.",
                      self.config.get("caption_lens", True), toggle_lens)
-        lens_rows.append(t.slider_row(lb, "Aumento", "Tamanho da linha em foco.", 1.1, 2.0, 0.1,
+        lens_rows.append(t.slider_row(lb, "Aumento", "Tamanho da frase em foco.", 1.1, 2.0, 0.1,
                                       self.config.get("caption_lens_zoom", 1.5), lambda v: f"{v:.1f}×".replace(".", ","),
                                       lambda v: apply("caption_lens_zoom", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
-        lens_rows.append(t.slider_row(lb, "Alcance", "Quantas linhas em volta do foco também crescem.", 1, 4, 0.5,
-                                      self.config.get("caption_lens_reach", 2),
-                                      lambda v: f"{v:g} linha{'s' if v > 1 else ''}".replace(".", ","),
-                                      lambda v: apply("caption_lens_reach", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
         lens_rows.append(t.row(lb, "Posição do foco", None, t.segmented(
             [("top", "Acima"), ("center", "Centro"), ("bottom", "Abaixo")],
             self.config.get("caption_lens_pos", "center"), lambda v: apply("caption_lens_pos", v))))

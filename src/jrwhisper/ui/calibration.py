@@ -4,7 +4,7 @@ import math
 import numpy as np
 from gi.repository import Gtk, GLib
 
-from ..audio import AudioCapture, calibration_state, default_source_name, evaluate_levels, friendly_mic_name, is_yeti, list_source_names, remove_mic_calibration, resolve_mic, rms_db, save_mic_calibration, yeti_hw_status
+from ..audio import AudioCapture, calibration_state, default_source_name, evaluate_levels, friendly_mic_name, is_yeti, list_source_names, mic_options, remove_mic_calibration, resolve_mic, rms_db, save_mic_calibration, yeti_hw_status
 from ..config import CALIBRATION_VERDICTS, TICK_INTERVAL
 from . import theme as t
 from .visuals import BarsVisual, rounded_rect, spectrum_bands
@@ -65,13 +65,10 @@ class CalibrationWindow(Gtk.Window):
         root.pack_start(head, False, False, 0)
 
         self.combo = t.PopupChoice()
-        names = list_source_names()
         default = default_source_name()
         initial = mic or resolve_mic(config)[0]
-        if initial not in names:
-            names.append(initial)
-        for n in names:
-            self.combo.append(n, friendly_mic_name(n) + ("  ·  padrão do sistema" if n == default else ""))
+        for n, label in mic_options(list_source_names(), initial):
+            self.combo.append(n, label + ("  ·  padrão do sistema" if n == default else ""))
         lb = t.group(root)
         mic_row = t.row(lb, "Microfone", " ", self.combo)
         self.lbl_mic_state = mic_row.subtitle
@@ -142,13 +139,13 @@ class CalibrationWindow(Gtk.Window):
             else:
                 parts.append(f"Ganho de hardware {hw.get('gain')}/100")
         if state == "ok":
-            parts.append(f"Calibrado em {cal['date']} · limiar {cal['threshold']:.4f}")
+            parts.append(f"Calibrado · {t.when_text(cal['date'])} · limiar {t.num(cal['threshold'], 4)}")
         elif state == "stale":
             parts.append(f"<span foreground='#FFC83C'>Ganho mudou desde a calibração (era {cal['hw_gain']}): recalibre</span>")
         else:
             parts.append("Sem calibração · o ditado mede o ruído a cada uso")
         if self.config.get("silence_threshold"):
-            parts.append(f"<span foreground='#FFC83C'>Limite manual {self.config['silence_threshold']:.4f} no painel; calibrar substitui</span>")
+            parts.append(f"<span foreground='#FFC83C'>Limite manual {t.num(self.config['silence_threshold'], 4)} no painel; calibrar substitui</span>")
         self.lbl_mic_state.set_markup("<span size='small' foreground='#FFFFFF99'>" + "  ·  ".join(parts) + "</span>")
         self.btn_auto.set_sensitive(cal is not None)
         self.marks = {k: cal[k] for k in ("noise", "voice", "threshold")} if cal else {}
@@ -220,7 +217,7 @@ class CalibrationWindow(Gtk.Window):
         nums = f"Ruído {_db_text(r['noise'])} dBFS  ·  Voz {_db_text(r['voice'])} dBFS  ·  Margem {margin:.0f} dB"
         if r["threshold"] is not None:
             save_mic_calibration(self.config, self.mic, r)
-            nums += f"  ·  Limiar {r['threshold']:.4f}\nSalvo para {friendly_mic_name(self.mic)}."
+            nums += f"  ·  Limiar {t.num(r['threshold'], 4)}\nSalvo para {friendly_mic_name(self.mic)}."
             if self.on_saved:
                 self.on_saved()
         self._refresh_mic_state()
