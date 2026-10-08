@@ -38,9 +38,26 @@ def test_visuals_draw_every_state():
     assert reduced.angle == 0.0       # reduzir movimento: sem rotação
 
 
+def _icon_pixels(cx, cy, size, ds=1):
+    from jrwhisper.ui.theme import draw_icon
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, int(80 * ds), int(80 * ds))
+    surf.set_device_scale(ds, ds)
+    draw_icon(cairo.Context(surf), "mic", cx, cy, size)
+    surf.flush()
+    return np.frombuffer(bytes(surf.get_data()), np.uint8).reshape(int(80 * ds), -1)[:, 3::4]
+
+
+def test_icons_are_crisp():
+    """Ícone do overlay: posição fracionária não reamostra (borra), e em 2× sai com o dobro de pixels."""
+    a, b = _icon_pixels(40.0, 40.0, 34), _icon_pixels(40.3, 39.6, 34)
+    assert (a == b).all()                         # alinhado ao pixel: idêntico, sem meio-tom extra
+    hi = _icon_pixels(40.0, 40.0, 34, ds=2)
+    assert hi.shape == (160, 160) and (hi > 0).sum() > 3 * (a > 0).sum()  # HiDPI: detalhe real, não esticado
+
+
 def run_tests():
     failed = False
-    for fn in (test_spectrum_bands, test_visuals_draw_every_state):
+    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")

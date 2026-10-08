@@ -8,9 +8,7 @@ import math
 
 import cairo
 import numpy as np
-from gi.repository import Gdk
-
-from .theme import accent_pair, hex_to_rgb, icon_pixbuf
+from .theme import accent_pair, draw_icon, hex_to_rgb
 
 SIZE_SCALE = {"s": 0.8, "m": 1.0, "l": 1.25}
 
@@ -121,7 +119,6 @@ class OrbVisual(Visual):
     def __init__(self, config):
         super().__init__(config)
         self.angle = 0.0   # fase do plasma
-        self.mic = icon_pixbuf("mic", int(34 * self.scale), "#FFFFFF", 1.8)
 
     def size(self):
         d = (self.RING + 2 * self.PAD) * self.scale
@@ -233,9 +230,7 @@ class OrbVisual(Visual):
             cr.stroke()
         else:
             alpha = 0.55 if self.state in ("transcribing", "calibrating") else 0.95
-            w, h = self.mic.get_width(), self.mic.get_height()
-            Gdk.cairo_set_source_pixbuf(cr, self.mic, cx - w / 2, cy - h / 2)
-            cr.paint_with_alpha(alpha)
+            draw_icon(cr, "mic", cx, cy, 34 * s, (1, 1, 1, alpha), 1.8)
 
 
 class WaveVisual(Visual):

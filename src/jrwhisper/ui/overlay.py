@@ -15,7 +15,7 @@ from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
 from .. import learning
 from ..config import _debug_log, load_config
-from .theme import icon_pixbuf
+from .theme import draw_icon
 from .captionview import CaptionView
 from .visuals import make_visual, rounded_rect
 
@@ -120,7 +120,6 @@ class WhisperFlowOverlay(Gtk.Window):
         else:
             gx, gy = self.cx + self.vw / 2 + 6 * s, self.cy - 8 * s
         self.gear = (int(gx), int(gy), int(16 * s) + 6, int(16 * s) + 6)
-        self.gear_icon = icon_pixbuf("settings", int(15 * s), "#FFFFFF", 1.8)
 
         self.status = "Iniciando…"
         self.text = ""
@@ -562,8 +561,7 @@ class WhisperFlowOverlay(Gtk.Window):
 
         # engrenagem discreta
         gx, gy, gw, gh = self.gear
-        Gdk.cairo_set_source_pixbuf(cr, self.gear_icon, gx + 3, gy + 3)
-        cr.paint_with_alpha(0.35)
+        draw_icon(cr, "settings", gx + gw / 2, gy + gh / 2, 15 * self.scale, (1, 1, 1, 0.35), 1.8)
 
         self._draw_text(cr)
         return False
