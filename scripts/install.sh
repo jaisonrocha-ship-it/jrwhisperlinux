@@ -19,7 +19,7 @@ command -v apt-get >/dev/null 2>&1 || err "Este instalador requer APT (Debian/Ub
 info "Instalando dependencias do sistema..."
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
-    python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
+    python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-rsvg-2.0 gir1.2-atspi-2.0 \
     python3-venv python3-pip \
     pulseaudio-utils \
     xdotool xclip wtype wl-clipboard \

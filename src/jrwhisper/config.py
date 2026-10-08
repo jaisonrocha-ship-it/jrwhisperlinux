@@ -137,9 +137,9 @@ DEFAULT_CONFIG = {
     # Histórico
     "history_enabled": False,
     "history_retention_days": 30,
-    "keep_audio": True,
+    "keep_audio": True,              # cópia do áudio de cada ditado (Opus) junto do histórico
     "obsidian_enabled": False,       # cópia de cada ditado na nota do dia do Obsidian
-    "obsidian_dir": "",              # pasta no vault (uma nota AAAA-MM-DD.md por dia)              # cópia do áudio de cada ditado (Opus) junto do histórico
+    "obsidian_dir": "",              # pasta no vault (uma nota AAAA-MM-DD.md por dia)
     "learn_corrections": True,       # palavra corrigida na revisão vira regra do dicionário
     "learn_counts": {},              # correções de palavra comum esperando a 2ª vez
     # Mãos livres
