@@ -574,7 +574,7 @@ class SettingsWindow(Gtk.Window):
             return
         state, cal = calibration_state(self.config, self._selected_mic())
         text, color = {
-            "ok": (f"Calibrado · limiar {cal['threshold']:.4f}" if cal else "", t.SUCCESS),
+            "ok": (f"Calibrado · limiar {t.num(cal['threshold'], 4)}" if cal else "", t.SUCCESS),
             "stale": ("Ganho do mic mudou: recalibre", t.WARNING),
             "none": ("Automático", "#98989D"),
         }[state]

@@ -487,12 +487,28 @@ def choice_row(lb, title, subtitle, options, active_id, on_change):
     return combo
 
 
+def num(value, digits=1):
+    """Número como se escreve em português: vírgula decimal ("0,0029", "1,5")."""
+    return f"{value:.{digits}f}".replace(".", ",")
+
+
+def when_text(date):
+    """Data salva como "AAAA-MM-DD HH:MM" no mesmo rótulo do histórico: "Hoje 13:35", "07/10 13:35"."""
+    import time
+    from .. import history
+    try:
+        return history.when(time.mktime(time.strptime(date, "%Y-%m-%d %H:%M")))
+    except (TypeError, ValueError):
+        return date or ""
+
+
 def slider_row(lb, title, subtitle, lo, hi, step, value, fmt, on_change, width=200):
     box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
     scale.set_draw_value(False)
     scale.set_value(value)
     scale.set_size_request(width, -1)
+    fmt = (lambda f: lambda v: f(v).replace(".", ","))(fmt)  # vírgula decimal em todo valor de ajuste
     val = label(fmt(value), "dim", xalign=1.0)
     val.set_width_chars(6)
 

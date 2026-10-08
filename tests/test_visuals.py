@@ -101,9 +101,19 @@ def test_bars_mirrored_and_waves_fade_out():
     assert glow(x_end) < 0.25 * glow(x_mid), (glow(x_end), glow(x_mid))  # a luz some antes da borda
 
 
+def test_ptbr_numbers_and_dates():
+    import time
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from jrwhisper.ui import theme as t
+    assert t.num(0.0029, 4) == "0,0029" and t.num(-1.0) == "-1,0"
+    assert t.when_text(time.strftime("%Y-%m-%d %H:%M")).startswith("Hoje ")
+    assert t.when_text("2026-03-05 09:07").endswith("05/03 09:07") and t.when_text(None) == ""
+
+
 def run_tests():
     failed = False
-    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp, test_orb_is_glass_and_reacts, test_bars_mirrored_and_waves_fade_out):
+    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp, test_orb_is_glass_and_reacts, test_bars_mirrored_and_waves_fade_out, test_ptbr_numbers_and_dates):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")

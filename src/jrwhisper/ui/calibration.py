@@ -139,13 +139,13 @@ class CalibrationWindow(Gtk.Window):
             else:
                 parts.append(f"Ganho de hardware {hw.get('gain')}/100")
         if state == "ok":
-            parts.append(f"Calibrado em {cal['date']} · limiar {cal['threshold']:.4f}")
+            parts.append(f"Calibrado · {t.when_text(cal['date'])} · limiar {t.num(cal['threshold'], 4)}")
         elif state == "stale":
             parts.append(f"<span foreground='#FFC83C'>Ganho mudou desde a calibração (era {cal['hw_gain']}): recalibre</span>")
         else:
             parts.append("Sem calibração · o ditado mede o ruído a cada uso")
         if self.config.get("silence_threshold"):
-            parts.append(f"<span foreground='#FFC83C'>Limite manual {self.config['silence_threshold']:.4f} no painel; calibrar substitui</span>")
+            parts.append(f"<span foreground='#FFC83C'>Limite manual {t.num(self.config['silence_threshold'], 4)} no painel; calibrar substitui</span>")
         self.lbl_mic_state.set_markup("<span size='small' foreground='#FFFFFF99'>" + "  ·  ".join(parts) + "</span>")
         self.btn_auto.set_sensitive(cal is not None)
         self.marks = {k: cal[k] for k in ("noise", "voice", "threshold")} if cal else {}
@@ -217,7 +217,7 @@ class CalibrationWindow(Gtk.Window):
         nums = f"Ruído {_db_text(r['noise'])} dBFS  ·  Voz {_db_text(r['voice'])} dBFS  ·  Margem {margin:.0f} dB"
         if r["threshold"] is not None:
             save_mic_calibration(self.config, self.mic, r)
-            nums += f"  ·  Limiar {r['threshold']:.4f}\nSalvo para {friendly_mic_name(self.mic)}."
+            nums += f"  ·  Limiar {t.num(r['threshold'], 4)}\nSalvo para {friendly_mic_name(self.mic)}."
             if self.on_saved:
                 self.on_saved()
         self._refresh_mic_state()
