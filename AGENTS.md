@@ -57,7 +57,7 @@ bash scripts/install.sh
 6. **Silence detection com histerese** — confirmação de fala 150ms + gap tolerance 2.5s.
 7. **GTK3 threads** — use `GLib.idle_add` para atualizar UI de threads background.
 8. **`os.execv` no bootstrap** — reexecuta o script dentro do venv. Cuidado com `sys.argv`.
-9. **Instalação por symlink** — `~/.local/bin/dictate` aponta para `src/dictate`, que acha o pacote via `realpath`. Nunca copie só o `src/dictate`.
+9. **Instalação por lançador** — `~/.local/bin/dictate` é cópia de `scripts/dictate-launcher.sh`: lê o caminho do repositório em `~/.config/dictate/repo` e executa o `src/dictate` de lá (que acha o pacote via `realpath`). Repositório movido ou renomeado: ele procura em `~` e se corrige; não achou, notifica. Nunca copie só o `src/dictate`.
 10. **2º toque no atalho = SIGUSR1** — a segunda instância só sinaliza e sai. `DictateThread.hotkey()` decide pelo `stage`: waiting cancela, listening encerra e transcreve, choosing cola, busy ignora. SIGTERM continua sendo "sair".
 
 ## Pitfalls Conhecidos

@@ -54,9 +54,14 @@ ok "Ambiente Python configurado"
 
 info "Instalando comando dictate..."
 mkdir -p "$HOME/.local/bin"
-# Symlink, não cópia: src/dictate carrega o pacote src/jrwhisper/ ao lado dele.
+# Lançador, não symlink: guarda o caminho do repositório e se acha sozinho se ele for movido
+# (o src/dictate do repositório carrega o pacote src/jrwhisper/ ao lado dele).
 chmod +x "$PWD/src/dictate"
-ln -sfn "$PWD/src/dictate" "$HOME/.local/bin/dictate"
+mkdir -p "$HOME/.config/dictate"
+printf '%s\n' "$PWD" > "$HOME/.config/dictate/repo"
+rm -f "$HOME/.local/bin/dictate"  # o symlink antigo apontaria o cp para dentro do repositório
+cp "$PWD/scripts/dictate-launcher.sh" "$HOME/.local/bin/dictate"
+chmod +x "$HOME/.local/bin/dictate"
 ok "Comando dictate instalado"
 
 mkdir -p "$HOME/.config/dictate"
