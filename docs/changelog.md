@@ -1,5 +1,12 @@
 # Changelog — JRWhisperLinux
 
+## Em desenvolvimento
+
+### Novidades
+* **Aprende com as suas correções:** a palavra corrigida na revisão ganha um selo "Lembrar" (✓ Paulo → Pablo) e um sublinhado; ao colar ou copiar, vira regra do Dicionário, e nome próprio/sigla entra também no vocabulário do Whisper. Clique no selo para não lembrar. Palavra comum ("mais" → "mas") só vira regra na 2ª correção igual; troca de palavra inteira nunca vira regra. Ajustes → Texto → "Aprender com as correções".
+* **Histórico mais completo:** cada ditado guarda também o texto da IA antes das suas correções, as correções feitas e a janela; com "Guardar o áudio" (Ajustes → Histórico, ligado), uma cópia em Opus (~16 MB por hora de fala, comprimida depois de colar) que some junto com a entrada. Base para estilo pessoal, cadastro de voz e treino.
+* **Tempos por etapa no log** (transcrição e texto/IA, em ms) para medir o impacto de cada novidade na agilidade.
+
 ## v4.0 — 2026-10-07 (Estável / Atual)
 
 ### Novidades (desde a v3.2)

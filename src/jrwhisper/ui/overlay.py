@@ -13,6 +13,7 @@ import re
 import cairo
 from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
 
+from .. import learning
 from ..config import _debug_log, load_config
 from .theme import icon_pixbuf
 from .captionview import CaptionView
@@ -49,7 +50,8 @@ ACTIONS = (("Colar", "paste"), ("Copiar", "copy"), ("Descartar", "discard"))
 class WhisperFlowOverlay(Gtk.Window):
     MAX_LINES = 3
     CHOICE_LINES = 6   # revisão com IA: mais texto à vista
-    CHIP_ROWS = 3      # espaço reservado: 2 linhas de modos + 1 de ações
+    CHIP_ROWS = 4      # espaço reservado: 2 linhas de modos + 1 de "lembrar" + 1 de ações
+    MODE_ROWS = 2
 
     def __init__(self, config=None):
         Gtk.Window.__init__(self, type=Gtk.WindowType.POPUP)
@@ -75,6 +77,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.captions = bool(config.get("overlay_captions"))
         # IA ligada (fora do mãos livres): o texto espera a escolha em vez de colar sozinho
         self.choices_enabled = bool(config.get("ai_enabled")) and not config.get("handsfree_enabled")
+        self.learn = bool(config.get("learn_corrections", True))
         position = config.get("overlay_position", "bottom")
         s = self.scale = self.visual.scale
 
@@ -131,6 +134,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self._chip_rects = []    # [(x, y, w, h, ação)] do último desenho; palavra: ("word", início, fim)
         self.edited = False      # o usuário corrigiu palavras desde o último show_choices
         self._editor = None      # (janela, entry, início, fim) da palavra em edição
+        self.corrections = []    # [{"old", "new", "remember"}]: palavras corrigidas que viram regra ao colar
         self._hover = None
         self._scroll = 0         # 1ª linha visível na revisão (texto longo, ex.: e-mail)
         self._more = (False, False)  # há linhas (acima, abaixo) fora da vista
@@ -186,7 +190,11 @@ class WhisperFlowOverlay(Gtk.Window):
         self._finish_edit(True)  # clicar em outra coisa confirma a palavra em edição
         if hit and self.choices and not self.choices_busy:
             x, y, w, h, action = hit
-            if isinstance(action, tuple):
+            if isinstance(action, tuple) and action[0] == "learn":
+                c = self.corrections[action[1]]
+                c["remember"] = not c["remember"]
+                self.queue_draw()
+            elif isinstance(action, tuple):
                 self._edit_word(action[1], action[2], (x, y, w, h))
             else:
                 self.pick(action)
@@ -248,7 +256,7 @@ class WhisperFlowOverlay(Gtk.Window):
 
     def _on_motion(self, _w, event):
         hit = self._hit(event.x, event.y)
-        self._set_hover(hit[4] if hit and isinstance(hit[4], tuple) else None)
+        self._set_hover(hit[4] if hit and isinstance(hit[4], tuple) and hit[4][0] == "word" else None)
 
     def _set_hover(self, word):
         if word != self._hover and self.get_window():
@@ -301,11 +309,28 @@ class WhisperFlowOverlay(Gtk.Window):
         win.get_display().get_default_seat().ungrab()
         new = entry.get_text().strip()
         if commit and new != self.text[start:end]:
+            self._note_correction(self.text[start:end], new)
             text = re.sub(r" {2,}", " ", self.text[:start] + new + self.text[end:]).strip()
             self.text = self._final_text = text
             self.edited = True
         win.destroy()
         self._grab_keys()  # o editor tinha o teclado; devolve para a revisão
+
+    def _note_correction(self, old, new):
+        """Grafia corrigida vira candidata a regra (marcada "lembrar"; clique no selo desmarca)."""
+        if not self.learn:
+            return
+        prev = next((c for c in self.corrections if c["new"] == learning._word(old)), None)
+        pair = learning.candidate(prev["old"] if prev else old, new)  # corrigiu de novo: vale a 1ª grafia
+        if prev:
+            self.corrections.remove(prev)
+        if pair:
+            self.corrections.append({"old": pair[0], "new": pair[1], "remember": True})
+
+    def _visible_corrections(self):
+        """Só as que ainda aparecem no texto (trocar de modo pode reescrever a palavra)."""
+        words = {learning._word(w) for w in self.text.split()}
+        return [(i, c) for i, c in enumerate(self.corrections) if c["new"] in words]
 
     def on_settings_icon_clicked(self, widget, event):
         _debug_log("Settings icon clicked: opening SettingsWindow")
@@ -462,8 +487,22 @@ class WhisperFlowOverlay(Gtk.Window):
             row_w += (self.chip_gap if row else 0) + it[3]
             row.append(it)
         rows.append(row)
-        # ponytail: além de CHIP_ROWS linhas os botões saem do cartão; com muitos modos, aumentar CHIP_ROWS
-        rows = rows[: self.CHIP_ROWS - 1]
+        # ponytail: além de MODE_ROWS linhas os modos somem; com muitos modos, aumentar MODE_ROWS e CHIP_ROWS
+        rows = rows[: self.MODE_ROWS]
+        learn = self._visible_corrections()
+        if learn:  # ✓ = vira regra ao colar; clique alterna
+            row = [chip("Lembrar:", None, "label")]
+            row_w = row[0][3]
+            for i, c in learn:
+                mark = "✓" if c["remember"] else "○"
+                it = chip(f"{mark}  <span alpha='60%'>{GLib.markup_escape_text(c['old'])} →</span> "
+                          f"{GLib.markup_escape_text(c['new'])}", ("learn", i),
+                          "learn" if c["remember"] else "learn_off")
+                if row_w + self.chip_gap + it[3] > max_w:
+                    break  # ponytail: correções além da largura do cartão ficam sem selo (aprendem marcadas)
+                row_w += self.chip_gap + it[3]
+                row.append(it)
+            rows.append(row)
         rows.append([chip(label, action, "primary" if action == "paste" else "action") for label, action in ACTIONS])
         return rows
 
@@ -553,6 +592,7 @@ class WhisperFlowOverlay(Gtk.Window):
             # legenda (várias linhas de texto corrido) lê melhor alinhada à esquerda
             lx = x + self.text_pad if self.max_lines > self.MAX_LINES and not self.choices else self.cx - w / 2
             if self.choices:  # cada palavra vira alvo de clique para edição
+                remembered = {c["new"] for _i, c in self._visible_corrections() if c["remember"]}
                 for m in re.finditer(r"\S+", line):
                     p0 = lay.index_to_pos(len(line[:m.start()].encode()))
                     p1 = lay.index_to_pos(len(line[:m.end() - 1].encode()))
@@ -563,6 +603,11 @@ class WhisperFlowOverlay(Gtk.Window):
                     if word == self._hover:
                         rounded_rect(cr, wx0 - pad, ty + 1, wx1 - wx0 + 2 * pad, self.line_h - 2, 6 * self.scale)
                         cr.set_source_rgba(1, 1, 1, 0.12 * a)
+                        cr.fill()
+                    if learning._word(m.group()) in remembered:  # sublinhado = vai ser lembrada
+                        uy = ty + (self.line_h + h) / 2 + 1 * self.scale
+                        rounded_rect(cr, wx0, uy, wx1 - wx0, 2 * self.scale, self.scale)
+                        cr.set_source_rgba(*self.visual.accent[0], 0.9 * a)
                         cr.fill()
             cr.move_to(lx, ty + (self.line_h - h) / 2)
             cr.set_source_rgba(1, 1, 1, a * la * (1.0 if (self.final or not current) else 0.85))
@@ -596,8 +641,10 @@ class WhisperFlowOverlay(Gtk.Window):
             for label, action, kind, w in row:
                 if kind != "label":
                     rounded_rect(cr, cx, cy, w, self.chip_h, self.chip_h / 2)
-                    if kind in ("selected", "primary"):  # modo atual mais suave que a ação principal
-                        cr.set_source_rgba(*accent, (0.95 if kind == "primary" else 0.45) * a * dim)
+                    if kind in ("selected", "primary", "learn"):  # modo atual mais suave que a ação principal
+                        cr.set_source_rgba(*accent, {"primary": 0.95, "selected": 0.45}.get(kind, 0.28) * a * dim)
+                    elif kind == "learn_off":
+                        cr.set_source_rgba(1, 1, 1, 0.04 * a * dim)
                     else:
                         cr.set_source_rgba(1, 1, 1, 0.09 * a * dim)
                     cr.fill()
@@ -606,7 +653,7 @@ class WhisperFlowOverlay(Gtk.Window):
                                    Pango.Weight.SEMIBOLD if kind == "primary" else Pango.Weight.MEDIUM, markup=True)
                 tw, th = lay.get_pixel_size()
                 cr.move_to(cx + (w - tw) / 2, cy + (self.chip_h - th) / 2)
-                cr.set_source_rgba(1, 1, 1, (0.5 if kind == "label" else 0.92) * a * dim)
+                cr.set_source_rgba(1, 1, 1, {"label": 0.5, "learn_off": 0.45}.get(kind, 0.92) * a * dim)
                 PangoCairo.show_layout(cr, lay)
                 cx += w + self.chip_gap
             cy += self.chip_h + self.chip_gap

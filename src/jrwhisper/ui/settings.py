@@ -678,6 +678,9 @@ class SettingsWindow(Gtk.Window):
                      self.config.get("remove_fillers", True), lambda v: self.set("remove_fillers", v))
         t.switch_row(lb, "Comandos de voz", "“vírgula”, “ponto final”, “nova linha”, “novo parágrafo”…",
                      self.config.get("voice_commands", True), lambda v: self.set("voice_commands", v))
+        t.switch_row(lb, "Aprender com as correções",
+                     "Palavra corrigida na revisão vira regra do Dicionário ao colar. Clique no selo para não lembrar.",
+                     self.config.get("learn_corrections", True), lambda v: self.set("learn_corrections", v))
         self._kv_editor(box, "Dicionário", "Corrige grafias recorrentes: o que o Whisper escreve → como deve ficar.",
                         "word_overrides", "escrito", "corrigido")
         self._kv_editor(box, "Atalhos de texto", "Diga o gatilho e o texto inteiro entra no lugar. Ex.: “minha assinatura”.",
@@ -915,6 +918,9 @@ class SettingsWindow(Gtk.Window):
                                               ("365", "1 ano"), ("0", "Sempre")],
                      str(self.config.get("history_retention_days", 30)),
                      lambda v: self.set("history_retention_days", int(v)))
+        t.switch_row(lb, "Guardar o áudio", "Cópia compacta de cada ditado (~16 MB por hora de fala), apagada junto "
+                     "com o histórico. Serve para cadastrar sua voz e treinar o reconhecimento.",
+                     self.config.get("keep_audio", True), lambda v: self.set("keep_audio", v))
         self._shortcut_row(lb, "Busca rápida", "Abre uma busca estilo Spotlight; Enter cola.",
                            "Dictate: histórico", f"{DICTATE_CMD} --history")
 

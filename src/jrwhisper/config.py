@@ -122,6 +122,9 @@ DEFAULT_CONFIG = {
     # Histórico
     "history_enabled": False,
     "history_retention_days": 30,
+    "keep_audio": True,              # cópia do áudio de cada ditado (Opus) junto do histórico
+    "learn_corrections": True,       # palavra corrigida na revisão vira regra do dicionário
+    "learn_counts": {},              # correções de palavra comum esperando a 2ª vez
     # Mãos livres
     "ptt_enabled": False,
     "handsfree_enabled": False,

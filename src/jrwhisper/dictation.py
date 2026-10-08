@@ -17,7 +17,7 @@ from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text
 from .profiles import window_class
-from . import ai, history, pipeline, ptt
+from . import ai, history, learning, pipeline, ptt
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -99,12 +99,20 @@ class DictateThread(threading.Thread):
             Gtk.main_quit()
         self.overlay.fade_out(_done)
 
-    def _remember(self, raw_text, result):
+    def _remember(self, raw_text, result, ai_text=None, edits=None):
         if not self.config.get("history_enabled"):
             return
         try:
-            history.add({"text": result.text, "raw": raw_text, "app": self.wm_class or "",
-                         "mode": result.mode["name"] if result.mode else ""})
+            ts = time.time()
+            entry = {"text": result.text, "raw": raw_text, "app": self.wm_class or "",
+                     "mode": result.mode["name"] if result.mode else "", "wid": self.active_win or ""}
+            if ai_text is not None and ai_text != result.text:
+                entry["ai_text"] = ai_text  # o que a IA escreveu antes das suas correções (estilo)
+            if edits:
+                entry["edits"] = edits
+            if self.config.get("keep_audio", True) and os.path.exists(LAST_WAV):
+                entry["audio"] = history.keep_audio(LAST_WAV, ts)
+            history.add(entry, ts=ts)
             if random.random() < 0.05:  # poda ocasional; não vale ler o arquivo todo a cada ditado
                 history.prune(self.config.get("history_retention_days", 30))
         except OSError as e:
@@ -325,7 +333,9 @@ class DictateThread(threading.Thread):
         except OSError:
             pass
 
+        t0 = time.perf_counter()
         raw_text = self.transcriber.transcribe_file(LAST_WAV, denoise=not self.system)  # RNNoise só piora áudio limpo
+        t1 = time.perf_counter()
         stop = False
         if handsfree and raw_text:
             raw_text, stop = ptt.strip_stop_phrase(raw_text, self.config.get("handsfree_stop_phrase", ""))
@@ -340,6 +350,9 @@ class DictateThread(threading.Thread):
         result = pipeline.process(
             self.config, raw_text, wm_class=self.wm_class, forced_mode=self.mode,
             on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+        t2 = time.perf_counter()
+        _debug_log(f"Tempos: transcrição {(t1 - t0) * 1000:.0f} ms · texto/IA {(t2 - t1) * 1000:.0f} ms "
+                   f"({len(all_audio) / sr:.1f}s de áudio)")
         if self.config.get("ai_enabled") and not handsfree:
             self._choose(raw_text, result)
             return stop
@@ -382,16 +395,17 @@ class DictateThread(threading.Thread):
             except queue.Empty:
                 continue
             if action in ("paste", "copy"):
+                ai_text = result.text
                 result.text = self.overlay.get_final_text() or result.text  # com as palavras corrigidas
             if action == "paste":
                 paste_text(result.text, self.active_win, result.config.get("paste_method", "ctrl+v"))
                 self.pasted = True
-                self._remember(raw_text, result)
                 done = f"Colado · {result.mode['name']}" if result.mode else "Texto colado"
             elif action == "copy":
                 copy_text(result.text)
-                self._remember(raw_text, result)
                 done = "Copiado"
+            if action in ("paste", "copy"):
+                done += self._learn(raw_text, result, ai_text)
             elif action == "discard":
                 done = "Descartado"
             else:  # "original" ou id de modo: reprocessa a partir do texto cru (ou do corrigido)
@@ -412,6 +426,23 @@ class DictateThread(threading.Thread):
             GLib.idle_add(self.overlay.hide_choices)
             GLib.idle_add(self.overlay.update_status, done, "status-error" if action == "discard" else "status-success")
             return
+
+    def _learn(self, raw_text, result, ai_text):
+        """Grava no histórico e transforma as correções marcadas em regra. Devolve o complemento do status."""
+        corrections = list(getattr(self.overlay, "corrections", []))
+        self._remember(raw_text, result, ai_text, [[c["old"], c["new"]] for c in corrections])
+        marked = [(c["old"], c["new"]) for c in corrections if c["remember"]]
+        if not (marked and self.config.get("learn_corrections", True)):
+            return ""
+        try:
+            learned, pending = learning.learn(marked)
+        except OSError as e:
+            _debug_log(f"Aprender correções: {e}")
+            return ""
+        _debug_log(f"Aprendido: {learned} · na 2ª vez: {pending}")
+        if learned:
+            return " · Aprendido: " + ", ".join(learned)
+        return f" · “{pending[0]}” aprende na 2ª vez" if pending else ""
 
     def restore_audio(self):
         """Volume de volta e mídia pausada retomada (uma vez só, de qualquer thread)."""
