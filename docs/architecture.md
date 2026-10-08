@@ -37,7 +37,7 @@
                                         ┌──────────────┐
                                         │  DAEMON      │
                                         │  SERVER      │
-                                        │  (medium)    │
+                                        │  (config)    │
                                         │  CUDA        │
                                         └──────────────┘
 ```
@@ -56,11 +56,11 @@ Microphone ──parec──▶ AudioCapture Thread ──buffer──▶ Dictat
                                                     Audio Buffer
                                                           │
                                                           ├──► [A cada 800ms (Se fala ativa)]:
-                                                          │    Salva WAV parcial ──► FFmpeg (nice RNNoise)
+                                                          │    Salva WAV parcial (sem RNNoise: velocidade)
                                                           │    ──► Transcritor Cliente ──► Socket Unix ──► Daemon (CUDA)
                                                           │    ──► Retorna texto parcial ──► UI (3-Line Pango Sliding Window)
                                                           │
-                                                          ▼ [Fim da fala (1.7s silêncio)]
+                                                          ▼ [Fim da fala (silence_duration)]
                                                     WAV Final
                                                           │
                                                           ├──► FFmpeg Denoise (nice -n 19 + RNNoise)
@@ -71,7 +71,7 @@ Microphone ──parec──▶ AudioCapture Thread ──buffer──▶ Dictat
                                                           ▼
                                                     Final Text
                                                           │
-                                                          ├──► Formatador (remover alucinações repetidas)
+                                                          ├──► pipeline.process: perfil → modo IA → formatação → IA → atalhos → regras
                                                           ▼
                                                     Text Output
                                                           │
@@ -81,23 +81,13 @@ Microphone ──parec──▶ AudioCapture Thread ──buffer──▶ Dictat
 
 ## Component Details
 
-### 1. WhisperFlowOverlay (`src/dictate`)
-* **Layout**: Janela GTK3 `Gtk.WindowType.POPUP` sem decoração, com fundo transparente via Cairo (`on_window_draw`) e cantos arredondados translúcidos via CSS.
-* **Componentes**: 
-  * `SiriWaveform`: Área de desenho Cairo a 60 FPS com 3 ondas senoidais sobrepostas moduladas pela amplitude real da fala do usuário.
-  * `status_label`: Rótulo de status contendo cores CSS mapeadas por estado (Amarelo = Calibrando, Branco = Aguardando, Ciano = Ouvindo, Roxo = Transcrevendo, Verde = Sucesso, Vermelho = Erro).
-  * `text_label`: Exibição de texto com `set_use_markup(True)` para suporte a marcação Pango.
-* **Janela Deslizante de 3 Linhas**: 
-  * O texto de transcrição parcial e final é processado pela função `wrap_text_to_lines` para limitar o conteúdo a no máximo 45 caracteres por linha.
-  * Apenas as **3 últimas linhas** são enviadas para a interface. 
-  * As linhas anteriores rolam para cima e ganham fading de opacidade através de cores em hexadecimal com canal alfa no Pango:
-    * Linha 1 (antiga): `#FFFFFF40` (25% opacidade)
-    * Linha 2 (média): `#FFFFFF99` (60% opacidade)
-    * Linha 3 (ativa): `#FFFFFFF2` (95% opacidade e itálico se parcial) ou `#FFFFFF` (negrito se final).
-  * Linhas ausentes são substituídas por espaços vazios invisíveis (`#FFFFFF00`) para travar a altura física do modal e evitar pulos e deformações no Cinnamon.
+### 1. WhisperFlowOverlay (`src/jrwhisper/ui/overlay.py`)
+* **Layout**: Janela GTK3 `Gtk.WindowType.POPUP` sem decoração e sem foco. Tudo é desenhado em Cairo/PangoCairo no handler `draw` (sem widgets: o tema do sistema não interfere). Click-through: `input_shape_combine_region` só na engrenagem e nos chips de escolha (`_chip_rects`).
+* **Visual**: `ui/visuals.py` (Orbe de plasma, Ondas, Barras + FFT), alimentado por `update_level`/`update_spectrum` via `GLib.idle_add`. A suavização ali é só visual; a detecção de fala usa o RMS instantâneo.
+* **Texto**: as últimas `overlay_lines` linhas (padrão 3) da transcrição parcial e final; revisão com IA no próprio overlay; editar uma palavra abre um POPUP à parte com `Gtk.Entry` (`_edit_word`). Legendas ao vivo: `ui/captionview.py`.
 * **Monitor Inteligente**: Usa a API Gdk Seat (`seat.get_pointer().get_position()`) para mover a janela do overlay para a tela em que o mouse está posicionado no momento de ativação do atalho.
 
-### 2. AudioCapture (`src/dictate`)
+### 2. AudioCapture (`src/jrwhisper/audio.py`)
 * Spawns `parec --device <name> --format=s16le --rate=16000 --channels=1 --latency-msec=30`
 * O buffer de latência de 30ms do parec elimina o delay de fragmentação de buffer do PipeWire (fazendo o parec iniciar em 70ms contra os 2.013s do default).
 * A thread leitora retira blocos de áudio a cada 32ms (1024 bytes) e calcula a raiz da média quadrada (RMS) instantânea (sem suavização).
@@ -111,22 +101,23 @@ Microphone ──parec──▶ AudioCapture Thread ──buffer──▶ Dictat
 * O filtro `arnndn` roda o modelo neural `bd.rnnn` (Beguiling Drafter) em C, convertendo internamente para 48kHz e limpando ruídos mecânicos e música de fundo. O áudio resultante é resamulado para 16kHz e repassado limpo para o Whisper.
 * O processo é priorizado com `nice -n 19` para evitar picos de uso de CPU que causem travamentos no Cinnamon.
 
-### 4. Transcriber e Daemon Mode
+### 4. Transcriber e Daemon Mode (`src/jrwhisper/transcribe.py`)
 * **Modo Cliente (Socket Unix)**: O transcritor tenta enviar o arquivo WAV local para o socket Unix `$XDG_RUNTIME_DIR/dictate_daemon.sock` (diretório 0700 por usuário).
 * **Modo Daemon**: Processo persistente rodando como serviço de usuário do systemd (`dictate --daemon`). Ele mantém o modelo Whisper carregado na GPU CUDA (`int8_float16`) reduzindo a latência de load do modelo de 2.2s para 0s.
-* **Greedy Decoding & Zero Context**: As transcrições parciais e finais utilizam `temperature=0.0` (greedy search determinístico) e `condition_on_previous_text=False`. Isso elimina loops de retentativa de temperatura no silêncio (evitando alucinações repetitivas do Whisper) e aumenta a velocidade do modelo na GPU RTX 4060 para ~30ms para trechos curtos.
+* **Cada requisição leva o config**: `model`, `language`, prompt etc. vão no JSON (`_transcribe_kwargs`); modelo trocado nos Ajustes faz o daemon recarregar sozinho; `language: "auto"` vira `None` e o idioma é escolhido só entre `auto_languages`.
+* **Sem fallback de temperatura & Zero Context**: `temperature=0.0` (com `beam_size=5`) e `condition_on_previous_text=False`. Isso elimina loops de retentativa de temperatura no silêncio (evitando alucinações repetitivas do Whisper) e aumenta a velocidade do modelo na GPU RTX 4060 para ~30ms para trechos curtos.
 
 ---
 
-## Silence Detection & VAD Hysteresis Algorithm
+## Silence Detection & VAD Hysteresis Algorithm (`DictateThread._listen`)
 
-O algoritmo foi otimizado para evitar que ruídos curtos isolados (estalos de teclado mecânico ou respirações curtas) travem ou reiniciem a gravação de silêncio:
+A histerese vale só para **começar**: 150 ms seguidos acima do limiar confirmam a fala (estalo de tecla não dispara). Depois disso, **qualquer** tick de voz zera a pausa. Exigir 150 ms seguidos também para zerar a pausa deixava silêncio acumular durante a fala (com a voz perto do limiar, 53–68% dos ticks ficam abaixo, medido no Yeti) e uma pausa curta encerrava o ditado; corrigido em `c6a2ccb`.
 
 ```
 speech_confirm_ticks = 0
 silence_counter = 0
 SPEECH_START_TICKS = 3             # 150ms contínuos acima do threshold para começar
-silence_samples_needed = 1.7 / 0.05 = 34  # 1.7s de silêncio contínuo para parar
+silence_needed = silence_duration / 0.05  # padrão 2.5 s = 50 ticks
 
 em cada tick (50ms):
     rms = capture.get_rms()
@@ -137,18 +128,15 @@ em cada tick (50ms):
             started = True
             include_pre_buffer()
             
-        # Histerese: Apenas reinicia o contador de silêncio se o som for
-        # sustentado por pelo menos 150ms consecutivos (3 ticks).
-        # Ruídos rápidos (ex: clique de tecla) não resetam mais o silêncio.
-        if started and speech_confirm_ticks >= SPEECH_START_TICKS:
-            silence_counter = 0
+        if started:
+            silence_counter = 0        # qualquer voz zera a pausa (NÃO exigir 3 ticks aqui)
     else:
         speech_confirm_ticks = 0
         if started:
             silence_counter += 1
             
-    if silence_counter >= silence_samples_needed:
-        stop_recording()
+    if silence_counter >= silence_needed and not system_audio:
+        stop_recording()   # som do computador só para no 2º toque ou em max_duration
 ```
 
 ---
@@ -156,6 +144,7 @@ em cada tick (50ms):
 ## Configuration (`config.json`)
 
 * `model`: Modelo Whisper local (default: `"medium"`).
-* `mic_device`: Nome da fonte PipeWire (default: `"easyeffects_source"` ou `"@DEFAULT_SOURCE@"`).
-* `silence_duration`: Tempo para corte automático (default: `1.7`s).
+* `mic_device`: Nome da fonte PipeWire (default: `"@DEFAULT_SOURCE@"`).
+* `silence_duration`: Tempo para corte automático (default: `2.5`s).
+* Lista completa e comentada: `DEFAULT_CONFIG` em `src/jrwhisper/config.py`. Chaves novas devem ser planas (`load_config` faz merge raso).
 * `noise_suppression`: Ativa/desativa o filtro neural integrado do FFmpeg (default: `true`).
