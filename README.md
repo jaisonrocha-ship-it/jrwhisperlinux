@@ -159,10 +159,15 @@ Mesmo quando o Whisper já pontuou o comando ("Olá vírgula, tudo"), sai uma po
 
 - **Três estilos:** Orbe (vidro translúcido com plasma, cresce e acende com a voz), Ondas (fitas de luz, uma por faixa de frequência) e Barras (espectro espelhado, graves no centro, picos que caem devagar).
 - **Feedback de trabalho:** pontinhos no fim do texto parcial; faixa de luz passando pelo texto ao transcrever ou reescrever.
+
+  <img src="docs/img/overlay-processando.png" width="360" alt="Transcrevendo: pontinhos e faixa de luz no texto">
+
 - **Ajustável:** cor de destaque (5 cores ou uma personalizada), tamanho, posição (embaixo, centro, topo), brilho, mostrar texto e "reduzir movimento". Pré-visualização ao vivo nos Ajustes.
 - **Não atrapalha:** o overlay não recebe cliques (só a engrenagem e os botões da revisão), aparece no monitor do mouse e é desenhado inteiro em Cairo, nítido em telas HiDPI.
 
 ### Inteligência (opcional)
+<p align="center"><img src="docs/img/ajustes-inteligencia.png" width="560" alt="Ajustes: aba Inteligência"></p>
+
 - **Fila de IAs, grátis e rápidas primeiro:** local (qwen2.5 no Ollama, ~0,2 s) → NVIDIA Nemotron (~0,5 s) → DeepSeek (~0,9 s). Cada uma tem 3 s; o texto original só é colado se todas falharem. A revisão mostra "via NVIDIA/DeepSeek" quando o texto saiu do computador.
 - **IA local sempre pronta:** o modelo fica carregado por 30 min depois do último uso e começa a carregar quando você começa a falar, se couber na GPU (VRAM livre e placa abaixo de 85 °C). Roda num Ollama próprio do ditado.
 - **Modos editáveis:** Corrigir, E-mail, Mensagem, Inglês e Tópicos, com o prompt de cada um. Modo padrão, ativação por voz ("modo e-mail, …") e modo por aplicativo.
