@@ -32,6 +32,7 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 | `scripts/ollama-container.sh` | Cria o `jrwhisper-ollama` (porta 11435, GPU, reinício automático); idempotente |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
+| `config/macropad.yaml` | Mapa do macropad CH57x (1189:8890): teclas F13–F18 + knob (volume, aperto = Ctrl+F13). Gravar com `sudo ~/.cargo/bin/ch57x-keyboard-tool upload < config/macropad.yaml`; os atalhos do Cinnamon são extras nos slots do `dictate` (`shortcuts.get_bindings`), e o PTT vigia todos |
 | `tests/` | Testes em script com assert (sem pytest). Herméticos: captions, capture_prebuffer, choices, formatter, launcher, learning, lexicon, mic_calibration, pipeline, ptt, style, vault, visuals (rodar com `XDG_RUNTIME_DIR` temporário). `render_overlay.py` (prints + `--bench`) e `render_windows.py` (Ajustes/busca/calibração fora da tela) |
 | `docs/` | `architecture.md` (processos, módulos, fluxos), `configuration.md` (cada chave do config), `changelog.md`, `licenses.md`, `img/` (prints gerados pelos scripts de render) |
 

@@ -16,30 +16,34 @@ DICTATE_CMD = os.path.expanduser("~/.local/bin/dictate")
 
 
 class KeyWatcher:
-    def __init__(self, accel):
+    """Vigia a tecla principal de cada atalho (teclado e macropad): qualquer uma pressionada conta."""
+
+    def __init__(self, accels):
         from Xlib import display  # python-xlib: só carrega quando o PTT está ligado
-        keyval, _mods = Gtk.accelerator_parse(accel)
-        if not keyval:
-            raise ValueError(f"atalho inválido: {accel}")
         self.display = display.Display()
-        self.keycode = self.display.keysym_to_keycode(keyval)  # keyval do GDK == keysym do X
-        if not self.keycode:
-            raise ValueError(f"sem keycode para {accel}")
+        self.keycodes = []
+        for accel in accels:
+            keyval, _mods = Gtk.accelerator_parse(accel)
+            # keyval do GDK == keysym do X; um keysym pode ter vários keycodes (XF86Tools: 179 e 191)
+            if keyval:
+                self.keycodes += [kc for kc, _i in self.display.keysym_to_keycodes(keyval)]
+        if not self.keycodes:
+            raise ValueError(f"sem keycode para {accels}")
 
     def held(self):
         keymap = self.display.query_keymap()
-        return bool(keymap[self.keycode // 8] & (1 << (self.keycode % 8)))
+        return any(keymap[k // 8] & (1 << (k % 8)) for k in self.keycodes)
 
 
 def watcher_for(config, command=DICTATE_CMD):
     """KeyWatcher da tecla principal do atalho, ou None (PTT desligado, Wayland ou sem atalho)."""
     if not config.get("ptt_enabled") or get_display_server() != "x11":
         return None
-    accel = shortcuts.get_binding(command)
-    if not accel:
+    accels = shortcuts.get_bindings(command)
+    if not accels:
         return None
     try:
-        return KeyWatcher(accel)
+        return KeyWatcher(accels)
     except Exception as e:
         _debug_log(f"PTT indisponível: {e}")
         return None

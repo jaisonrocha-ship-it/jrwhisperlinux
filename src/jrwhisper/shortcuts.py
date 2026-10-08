@@ -32,12 +32,14 @@ def find_slot(command):
     return None
 
 
-def get_binding(command):
+def get_bindings(command):
+    """Todos os atalhos do comando: o principal (o dos Ajustes) e extras, como a tecla do macropad."""
     slot = find_slot(command)
-    if not slot:
-        return None
-    binding = _read(f"{KB}/custom-keybindings/{slot}/binding") or []
-    return binding[0] if binding else None
+    return list(_read(f"{KB}/custom-keybindings/{slot}/binding") or []) if slot else []
+
+
+def get_binding(command):
+    return (get_bindings(command) or [None])[0]
 
 
 def set_binding(name, command, accel):
@@ -53,8 +55,8 @@ def set_binding(name, command, accel):
         _write(f"{KB}/custom-keybindings/{slot}/command", command)
         _write(f"{KB}/custom-keybindings/{slot}/binding", [accel])
         _write(f"{KB}/custom-list", slots + [slot])  # acrescenta no fim
-    else:
-        _write(f"{KB}/custom-keybindings/{slot}/binding", [accel])
+    else:  # troca só o principal; extras (macropad) ficam
+        _write(f"{KB}/custom-keybindings/{slot}/binding", [accel] + get_bindings(command)[1:])
     return slot
 
 
