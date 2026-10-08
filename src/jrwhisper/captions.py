@@ -20,7 +20,7 @@ from gi.repository import GLib, Gtk
 
 import requests
 
-from . import ai, history, secrets
+from . import ai, history, secrets, vault
 from .audio import SYSTEM_AUDIO, AudioCapture
 from .config import RUNTIME_DIR, TICK_INTERVAL, _debug_log
 from .paste import copy_text
@@ -253,6 +253,9 @@ class CaptionThread(threading.Thread):
             self._status("Nada para legendar", "status-error")
             return
         copy_text(text)
+        if self.config.get("obsidian_enabled"):
+            vault.append(self.config.get("obsidian_dir"), time.time(), vault.paragraphs(self.lines), app="Legendas",
+                         mode=f"→ {self.target}" if self.target else "")
         if self.config.get("history_enabled"):
             try:
                 history.add({"text": text, "raw": "", "app": "Legendas", "mode": self.target or ""})

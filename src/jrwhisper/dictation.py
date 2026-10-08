@@ -17,7 +17,7 @@ from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text, press_key
 from .profiles import window_class
-from . import ai, context, history, learning, pipeline, ptt
+from . import ai, context, history, learning, pipeline, ptt, vault
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -103,10 +103,16 @@ class DictateThread(threading.Thread):
         self.overlay.fade_out(_done)
 
     def _remember(self, raw_text, result, ai_text=None, edits=None):
+        ts = time.time()
+        ctx = self._context()
+        if self.config.get("obsidian_enabled"):  # independe do histórico: é a sua cópia
+            where = " · ".join(b for b in ((ctx.title, ctx.field) if ctx else ()) if b)
+            vault.append(self.config.get("obsidian_dir"), ts, result.text, raw=raw_text, where=where,
+                         app=(ctx.app if ctx and ctx.app else self.wm_class) or "",
+                         mode=result.mode["name"] if result.mode else "")
         if not self.config.get("history_enabled"):
             return
         try:
-            ts = time.time()
             entry = {"text": result.text, "raw": raw_text, "app": self.wm_class or "",
                      "mode": result.mode["name"] if result.mode else "", "wid": self.active_win or ""}
             if ai_text is not None and ai_text != result.text:

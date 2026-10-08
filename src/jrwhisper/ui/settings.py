@@ -929,7 +929,8 @@ class SettingsWindow(Gtk.Window):
         self._rebuild_profiles()
 
     def page_history(self):
-        root, box = t.page("Histórico", "Ditados anteriores, só no seu computador.")
+        root, box = t.page("Histórico", "Ditados anteriores no seu computador e, se quiser, no Obsidian.")
+        self._obsidian_group(box)
         content = self._feature_gate(box, "history_enabled", "Guardar histórico",
                                      "Busque e recole ditados antigos.")
         lb = t.group(content)
@@ -979,6 +980,41 @@ class SettingsWindow(Gtk.Window):
         clear.connect("clicked", do_clear)
         GLib.idle_add(refresh)
         return root
+
+    def _obsidian_group(self, box):
+        """Cópia no Obsidian: liga/desliga e a pasta da nota do dia (independe do histórico)."""
+        lb = t.group(box, "Obsidian", "Uma nota por dia (AAAA-MM-DD.md), um bloco por ditado com o bruto recolhido; "
+                                      "legendas também. Só acrescenta no fim e a retenção não apaga. Com o Obsidian "
+                                      "Sync ligado, as notas vão para a nuvem do Obsidian.")
+        folder = t.label(self._short_path(self.config.get("obsidian_dir")) or "Nenhuma pasta", "dim")
+        pick = Gtk.Button(label="Escolher…")
+
+        def choose(_b):
+            dlg = Gtk.FileChooserDialog(title="Pasta dos ditados no vault", transient_for=self,
+                                        action=Gtk.FileChooserAction.SELECT_FOLDER)
+            dlg.add_buttons("Cancelar", Gtk.ResponseType.CANCEL, "Escolher", Gtk.ResponseType.OK)
+            start = self.config.get("obsidian_dir") or os.path.expanduser("~/Documentos")
+            dlg.set_current_folder(start if os.path.isdir(start) else os.path.dirname(start))
+            if dlg.run() == Gtk.ResponseType.OK:
+                self.set("obsidian_dir", dlg.get_filename())
+                folder.set_text(self._short_path(dlg.get_filename()))
+            dlg.destroy()
+        pick.connect("clicked", choose)
+        fb = Gtk.Box(spacing=10)
+        fb.pack_start(folder, False, False, 0)
+        fb.pack_start(pick, False, False, 0)
+        t.switch_row(lb, "Copiar ditados para o Obsidian", None, self.config.get("obsidian_enabled", False),
+                     lambda v: self.set("obsidian_enabled", v))
+        t.row(lb, "Pasta", None, fb)
+
+    @staticmethod
+    def _short_path(path):
+        """~/…/01 - Pessoal/Ditados: cabe na linha sem esconder a parte que importa."""
+        if not path:
+            return ""
+        path = path.replace(os.path.expanduser("~"), "~", 1)
+        parts = path.split(os.sep)
+        return path if len(parts) <= 3 else os.sep.join([parts[0], "…"] + parts[-2:])
 
     def page_handsfree(self):
         root, box = t.page("Mãos livres", "Outros jeitos de ditar além de tocar no atalho.")
