@@ -127,6 +127,49 @@ def test_strip_reasoning():
         assert ai._strip_reasoning(raw) == want, (raw, ai._strip_reasoning(raw))
 
 
+class FakeOllama(BaseHTTPRequestHandler):
+    calls = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeOllama.calls.append((self.path, body))
+        out = {"message": {"content": "Oi."}} if self.path == "/api/chat" else {"done": True}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(out).encode())
+
+    def log_message(self, *a):
+        pass
+
+
+def test_local_ai_stays_loaded_and_warms_up():
+    """Reescrita local pede keep_alive; no início do ditado o modelo é pré-carregado se couber e não estiver."""
+    import time
+    server = HTTPServer(("127.0.0.1", 0), FakeOllama)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    cfg = dict(CFG, ai_provider="ollama", ai_chain=["ollama", "nvidia"], ai_ollama_model="qwen2.5",
+               ai_ollama_url=f"http://127.0.0.1:{server.server_port}")
+    real = ai.check_local
+    try:
+        assert ai.complete(cfg, "Corrija.", "oi") == "Oi."
+        assert FakeOllama.calls[-1][1]["keep_alive"] == ai.OLLAMA_KEEP_ALIVE  # sem isso: descarrega em 5 min
+        for status, warms in (((True, "GPU 50°C, 3000 MB livres"), True),   # cabe e está fora: carrega
+                              ((True, ai.LOADED), False),                   # já carregado: nada a fazer
+                              ((False, "sem VRAM"), False)):                # não cabe: não força a placa
+            FakeOllama.calls.clear()
+            ai.check_local = lambda c, st=status: st
+            ai.prefetch_local(cfg)
+            time.sleep(0.3)
+            gen = [b for path, b in FakeOllama.calls if path == "/api/generate"]
+            assert bool(gen) == warms, (status, FakeOllama.calls)
+            if warms:
+                assert gen[0] == {"model": "qwen2.5", "keep_alive": ai.OLLAMA_KEEP_ALIVE}
+    finally:
+        ai.check_local = real
+        server.shutdown()
+
+
 def test_when():
     import time as real
     now = real.mktime((2027, 1, 1, 10, 0, 0, 0, 0, -1))  # 1º de janeiro depois de ano não bissexto
@@ -166,7 +209,7 @@ def test_history():
 def run_tests():
     failed = False
     for fn in (test_profiles, test_send_key_per_profile, test_text_rules, test_voice_mode, test_mode_priority,
-               test_ai_pipeline_with_fake_server, test_strip_reasoning, test_when, test_history):
+               test_ai_pipeline_with_fake_server, test_strip_reasoning, test_local_ai_stays_loaded_and_warms_up, test_when, test_history):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")

@@ -42,6 +42,9 @@ CONTEXT_RULE = ("Antes do ditado pode vir <contexto> com o app, a janela, o camp
                 "copie, resuma ou responda o contexto; não mude o tom por causa dele. Reescreva só o ditado.")
 LOCAL_MAX_TEMP = 85      # °C: acima disso a IA local não carrega na GPU (vai para a nuvem)
 LOCAL_VRAM_MARGIN = 600  # MB livres além do tamanho do modelo para carregar sem estourar a placa
+# Quanto o Ollama mantém o modelo na VRAM depois do último uso: recarregar leva ~5–12 s, mais que os
+# 3 s que a fila dá ao local (sem isso, 5 min parado = o próximo ditado sempre ia para a nuvem).
+OLLAMA_KEEP_ALIVE = "30m"
 # Verificados com a API em 2026-10: só 8 de 59 modelos listados respondiam; estes reescrevem bem em PT.
 RECOMMENDED = [
     ("nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super · ~1,5 s"),
@@ -124,7 +127,8 @@ def complete(config, instruction, text, timeout=None, system=SYSTEM, options=Non
         if provider == "ollama":
             r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
                               json={"model": config.get("ai_ollama_model", "qwen2.5"), "messages": messages,
-                                    "stream": False, "options": {"temperature": 0.2, **(options or {})},
+                                    "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
+                                    "options": {"temperature": 0.2, **(options or {})},
                                     **({"format": fmt} if fmt else {})},
                               timeout=timeout)
             r.raise_for_status()
@@ -160,7 +164,7 @@ def translate_hymt(config, text, target, source_lang, timeout=6):
               else f"Translate the following segment into {en}, without additional explanation.\n\n{text}")
     try:
         r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
-                       json={"model": config["ai_ollama_model"], "stream": False, "keep_alive": "30m",  # recarregar leva ~12 s
+                       json={"model": config["ai_ollama_model"], "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                              "messages": [{"role": "user", "content": prompt}], "options": {"temperature": 0.2}},
                        timeout=timeout)
         r.raise_for_status()
@@ -196,6 +200,7 @@ def detect_voice_mode(config, text):
     return None, text
 
 
+LOADED = "já carregado na GPU"
 _gpu = {"t": 0.0, "ok": None, "why": ""}  # checagem da IA local, feita em paralelo à fala
 
 
@@ -219,7 +224,7 @@ def check_local(config):
         if size is None:
             return False, f"modelo {model} não instalado no Ollama"
         if loaded.get(model.split(":")[0], {}).get("size_vram"):
-            return True, "já carregado na GPU"
+            return True, LOADED
         free, temp, used = (int(v) for v in subprocess.check_output(
             ["nvidia-smi", "--query-gpu=memory.free,temperature.gpu,utilization.gpu",
              "--format=csv,noheader,nounits"], timeout=2).decode().split("\n")[0].split(","))
@@ -235,11 +240,28 @@ def check_local(config):
 
 
 def prefetch_local(config):
-    """Roda a checagem numa thread no início do ditado: na hora da IA, a resposta já está pronta (0 ms)."""
+    """No início do ditado, numa thread: checa a GPU (na hora da IA a resposta já está pronta) e, se o
+    modelo local couber mas estiver descarregado, manda o Ollama carregá-lo enquanto você fala."""
     def work():
         _gpu["ok"], _gpu["why"] = check_local(config)
         _gpu["t"] = time.time()
+        if _gpu["ok"] and "ollama" in (config.get("ai_chain") or [config.get("ai_provider")]) \
+                and _gpu["why"] != LOADED:
+            warm_local(config)
     threading.Thread(target=work, daemon=True).start()
+
+
+def warm_local(config):
+    """Carrega o modelo sem gerar nada (/api/generate sem prompt) e o mantém por OLLAMA_KEEP_ALIVE."""
+    t0 = time.perf_counter()
+    try:
+        _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/generate",
+                   json={"model": config.get("ai_ollama_model", "qwen2.5"), "keep_alive": OLLAMA_KEEP_ALIVE},
+                   timeout=30).raise_for_status()
+        _gpu["why"] = LOADED
+        _debug_log(f"IA local pré-carregada em {time.perf_counter() - t0:.1f} s")
+    except requests.RequestException as e:
+        _debug_log(f"IA local: pré-carga falhou ({type(e).__name__})")
 
 
 def _local_ok(config):
