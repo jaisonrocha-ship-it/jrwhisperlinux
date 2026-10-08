@@ -17,7 +17,7 @@ from .. import learning
 from ..config import _debug_log, load_config
 from .theme import draw_icon
 from .captionview import CaptionView
-from .visuals import CARD, CARD_ALPHA, make_visual, rounded_rect
+from .visuals import CARD, CARD_ALPHA, card, make_visual, rounded_rect
 
 # classe CSS antiga (vinda do DictateThread) → estado do visual
 STATES = {
@@ -460,7 +460,8 @@ class WhisperFlowOverlay(Gtk.Window):
         """Linhas do texto quebrado pelo Pango (quebra real): as últimas ao ditar, a janela rolável na revisão."""
         if not self.text:
             return []
-        layout = self._layout(cr, self.text, self.font_px, width=self.text_w - 2 * self.text_pad)
+        dots = 0 if self.choices else 26 * self.scale  # espaço dos pontinhos: nunca colam no texto
+        layout = self._layout(cr, self.text, self.font_px, width=self.text_w - 2 * self.text_pad - dots)
         raw = self.text.encode()
         lines = []  # (linha, posição do 1º caractere em self.text): a edição troca a palavra no texto todo
         for ln in layout.get_lines_readonly():
@@ -594,12 +595,8 @@ class WhisperFlowOverlay(Gtk.Window):
         bw = self.text_w
         x = self.cx - bw / 2
         y = self.text_anchor - self.box_h if self.text_above else self.text_anchor
-        rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
-        cr.set_source_rgba(*CARD, CARD_ALPHA * a)
-        cr.fill_preserve()
-        cr.set_source_rgba(1, 1, 1, 0.08 * a)
-        cr.set_line_width(1)
-        cr.stroke()
+        card(cr, x, y, bw, self.box_h, 16 * self.scale, a)
+        cr.new_path()
 
         cr.save()
         rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)

@@ -14,7 +14,7 @@ SIZE_SCALE = {"s": 0.8, "m": 1.0, "l": 1.25}
 # Superfície de vidro escuro de tudo que o overlay desenha (caixa de texto, legendas, pílula, status):
 # um tom só, opaco o bastante para o texto de trás não atravessar a leitura em fundo claro.
 CARD = (0.09, 0.09, 0.11)
-CARD_ALPHA = 0.92
+CARD_ALPHA = 0.95
 
 # estado → cores (início, fim) quando não seguem o acento
 STATE_COLORS = {
@@ -370,33 +370,41 @@ class BarsVisual(Visual):
         grad = self.gradient_mirrored(x0 + pad, x0 + w - pad)
         s = self.scale
         show_peaks = self.state == "listening"
-        for i in range(self.SIDE):
+        peaks = []
+        for i in range(self.SIDE):  # todas as barras num caminho só: um preenchimento por quadro
             v, pk = self.shown[i], self.peaks[i]
             bh = max(1.5 * s, v * max_h)
             for side in (-1, 1):  # centro = graves; espelhado para as duas pontas
                 x = cx + side * (i * gap + gap / 2) - bw / 2
                 rounded_rect(cr, x, cy - bh, bw, 2 * bh, bw / 2)
-                cr.set_source(grad)
-                cr.fill()
-                if show_peaks and pk > v + 0.04:  # marcador do pico, acima e abaixo
-                    py = pk * max_h + 2.5 * s
-                    cr.set_source_rgba(1, 1, 1, 0.55 * min(1.0, (pk - v) * 6))
-                    for yy in (cy - py - 1.2 * s, cy + py - 0.8 * s):
-                        rounded_rect(cr, x, yy, bw, 2 * s, s)
-                        cr.fill()
+                if show_peaks and pk > v + 0.04:
+                    peaks.append((x, pk * max_h + 2.5 * s))
+        cr.set_source(grad)
+        cr.fill()
+        for x, py in peaks:  # marcadores de pico, acima e abaixo, também num preenchimento
+            rounded_rect(cr, x, cy - py - 1.2 * s, bw, 2 * s, s)
+            rounded_rect(cr, x, cy + py - 0.8 * s, bw, 2 * s, s)
+        cr.set_source_rgba(1, 1, 1, 0.5)
+        cr.fill()
+
+
+def card(cr, x, y, w, h, r, a=1.0):
+    """Cartão de vidro do overlay: sombra curta (destaca sobre página escura e cheia de texto),
+    fundo CARD e borda fina. Deixa o contorno no path para quem quiser traçar por cima."""
+    rounded_rect(cr, x - 2.5, y - 0.5, w + 5, h + 5, r + 2.5)  # sombra curta: uma camada, barata
+    cr.set_source_rgba(0, 0, 0, 0.22 * a)
+    cr.fill()
+    rounded_rect(cr, x, y, w, h, r)
+    cr.set_source_rgba(*CARD, CARD_ALPHA * a)
+    cr.fill_preserve()
+    cr.set_source_rgba(1, 1, 1, 0.13 * a)
+    cr.set_line_width(1)
+    cr.stroke_preserve()
 
 
 def _pill(cr, x, y, w, h):
-    rounded_rect(cr, x, y, w, h, h / 2)
-    cr.set_source_rgba(*CARD, CARD_ALPHA)
-    cr.fill_preserve()
-    hl = cairo.LinearGradient(0, y, 0, y + h)
-    hl.add_color_stop_rgba(0, 1, 1, 1, 0.14)
-    hl.add_color_stop_rgba(0.5, 1, 1, 1, 0.03)
-    hl.add_color_stop_rgba(1, 1, 1, 1, 0.06)
-    cr.set_source(hl)
-    cr.set_line_width(1.0)
-    cr.stroke()
+    card(cr, x, y, w, h, h / 2)
+    cr.new_path()
 
 
 VISUALS = {"orb": OrbVisual, "waves": WaveVisual, "bars": BarsVisual}

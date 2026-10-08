@@ -15,7 +15,7 @@ import time
 import cairo
 from gi.repository import GLib, Pango, PangoCairo
 
-from .visuals import CARD, CARD_ALPHA, rounded_rect
+from .visuals import CARD, CARD_ALPHA, card, rounded_rect
 
 LENS_POS = {"top": 0.35, "center": 0.5, "bottom": 0.65}
 RESUME_SECS = 8   # relendo e parado este tempo: volta ao vivo
@@ -83,12 +83,8 @@ class CaptionView:
         return lay
 
     def draw(self, cr, x, y, w, h, a=1.0):
-        rounded_rect(cr, x, y, w, h, 16 * self.scale)
-        cr.set_source_rgba(*CARD, CARD_ALPHA * a)
-        cr.fill_preserve()
-        cr.set_source_rgba(1, 1, 1, 0.08 * a)
-        cr.set_line_width(1)
-        cr.stroke()
+        card(cr, x, y, w, h, 16 * self.scale, a)
+        cr.new_path()
 
         top, inner = y + self.pad, h - 2 * self.pad
         width = (w - 2 * self.pad) / self.zoom  # a linha do foco, aumentada, ainda cabe no cartão

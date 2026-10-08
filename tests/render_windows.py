@@ -27,8 +27,8 @@ def snap(window, path, size=None):
     window.remove(child)
     off = Gtk.OffscreenWindow()
     off.add(child)
-    if size:
-        off.set_size_request(*size)
+    size = size or window.get_default_size()  # tamanho real da janela, não o natural do conteúdo
+    off.set_size_request(*size)
     off.show_all()
     for _ in range(40):
         while Gtk.events_pending():
