@@ -601,6 +601,9 @@ class WhisperFlowOverlay(Gtk.Window):
         rounded_rect(cr, x, y, bw, self.box_h, 16 * self.scale)
         cr.clip()
         n = len(lines)
+        # feedback de trabalho: pontinhos no fim enquanto o texto é parcial; brilho passando ao transcrever / IA
+        pending = bool(lines) and not self.final and not self.choices
+        processing = (pending and self.visual.state == "transcribing") or self.choices_busy
         # linhas antigas esmaecem; a atual é branca (parcial um pouco mais suave)
         alphas = [0.38, 0.62, 1.0][-n:] if n <= 3 else [0.5 + 0.5 * i / (n - 1) for i in range(n)]
         if self.choices:
@@ -614,6 +617,8 @@ class WhisperFlowOverlay(Gtk.Window):
             w, h = lay.get_pixel_size()
             # legenda (várias linhas de texto corrido) lê melhor alinhada à esquerda
             lx = x + self.text_pad if self.max_lines > self.MAX_LINES and not self.choices else self.cx - w / 2
+            if current and pending and lx != x + self.text_pad:
+                lx -= 11 * self.scale  # linha + pontinhos centralizados juntos
             if self.choices:  # cada palavra vira alvo de clique para edição
                 remembered = {c["new"] for _i, c in self._visible_corrections() if c["remember"]}
                 for m in re.finditer(r"\S+", line):
@@ -638,6 +643,12 @@ class WhisperFlowOverlay(Gtk.Window):
             cr.move_to(lx, ty + (self.line_h - h) / 2)
             cr.set_source_rgba(1, 1, 1, a * la * (1.0 if (self.final or not current) else 0.85))
             PangoCairo.show_layout(cr, lay)
+            if processing:  # brilho que passa: o texto ainda está sendo trabalhado
+                cr.move_to(lx, ty + (self.line_h - h) / 2)
+                cr.set_source(self._shimmer(x, bw, a * la))
+                PangoCairo.show_layout(cr, lay)
+            if current and pending:
+                self._typing_dots(cr, min(lx + w + 7 * self.scale, x + bw - 26 * self.scale), ty + self.line_h / 2, a)
             ty += self.line_h
         if self.choices:  # setinhas: há texto acima/abaixo (roda do mouse rola)
             top = y + self.text_pad + (self.box_h - chips_h - 2 * self.text_pad - self.line_h * n) / 2
@@ -655,6 +666,25 @@ class WhisperFlowOverlay(Gtk.Window):
         box = [(x, y, bw, self.box_h, "box")] if self.choices else []
         self._set_chip_rects(box + word_rects + chip_rects)
         cr.restore()
+
+    def _typing_dots(self, cr, x, cy, a):
+        """Três pontinhos em onda (estilo "digitando…"): sobem e acendem um depois do outro."""
+        s, t = self.scale, self.visual.t
+        for i in range(3):
+            wave = 0.0 if self.visual.reduce_motion else max(0.0, math.sin(t * 6.0 - i * 0.9))
+            cr.arc(x + i * 7 * s, cy - 1.6 * s * wave, 2.1 * s, 0, 2 * math.pi)
+            cr.set_source_rgba(1, 1, 1, a * (0.35 + 0.55 * wave))
+            cr.fill()
+
+    def _shimmer(self, x, bw, a):
+        """Faixa de luz atravessando o cartão a cada ~1,4 s (desenhada por cima do texto)."""
+        span = bw + 240 * self.scale
+        cx = x - 120 * self.scale + (0 if self.visual.reduce_motion else (self.visual.t * 0.75 % 1.0) * span)
+        g = cairo.LinearGradient(cx - 60 * self.scale, 0, cx + 60 * self.scale, 0)
+        g.add_color_stop_rgba(0, *self.visual.accent[1], 0)
+        g.add_color_stop_rgba(0.5, 1, 1, 1, 0.75 * a)
+        g.add_color_stop_rgba(1, *self.visual.accent[0], 0)
+        return g
 
     def _draw_chips(self, cr, rows, top, a):
         rects = []

@@ -193,6 +193,34 @@ def test_overlay_fade_on_frame_clock():
     o.destroy()
 
 
+def test_overlay_working_feedback():
+    """Texto parcial: pontinhos animados; transcrevendo: brilho passando; final: parado."""
+    import cairo
+    import numpy as np
+    from jrwhisper.ui.overlay import WhisperFlowOverlay
+    o = WhisperFlowOverlay(dict(DEFAULT_CONFIG))
+
+    def frame(t):
+        o.visual.t = t
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, o.W, o.H)
+        o._draw_text(cairo.Context(surf))
+        surf.flush()
+        return np.frombuffer(bytes(surf.get_data()), np.uint8).copy()
+
+    o.update_text("Prezado Marcos, segue o booking", final=False)
+    o.text_alpha, o.box_h = 1.0, 60
+    frame(0.0)  # mede as linhas
+    o.box_h = o._target_box_h()
+    o.visual.set_state("listening")
+    assert (frame(0.10) != frame(0.35)).sum() > 20          # pontinhos se mexem
+    o.visual.set_state("transcribing")
+    a, b = frame(0.2), frame(0.9)
+    assert (a != b).sum() > 400                            # brilho atravessa o texto
+    o.update_text("Prezado Marcos, segue o booking.", final=True)
+    assert (frame(0.2) == frame(0.9)).all()                # final: nada se mexe
+    o.destroy()
+
+
 def test_overlay_keys_and_scroll():
     import cairo
     from gi.repository import Gdk
@@ -265,7 +293,7 @@ def run_tests():
     for fn in (test_original_then_paste, test_copy_and_discard_do_not_paste, test_send_pastes_then_presses_send_key,
                test_raw_is_pure_whisper_output, test_continue_appends_and_redoes_mode,
                test_pause_counts_only_real_silence, test_edited_word_is_pasted,
-               test_overlay_word_edit, test_overlay_fade_on_frame_clock, test_overlay_keys_and_scroll, test_hotkey_second_press):
+               test_overlay_word_edit, test_overlay_fade_on_frame_clock, test_overlay_working_feedback, test_overlay_keys_and_scroll, test_hotkey_second_press):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
