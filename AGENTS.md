@@ -14,7 +14,7 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 
 1. Leia `README.md` — visão geral e quick start
 2. Leia `docs/architecture.md` — como o sistema funciona internamente
-3. Leia `docs/licenses.md` — auditoria completa de dependências
+3. Leia `docs/licenses.md` — auditoria completa de dependências; `docs/configuration.md` descreve cada chave do config
 4. Leia `DESIGN.md` — tokens de design do site
 5. Consulte a wiki: `[[JRWhisperLinux]]` no vault JasonRock.DEV
 
@@ -22,16 +22,18 @@ Instruções para agentes de IA (Hermes, Claude, Codex, Gemini) trabalhando nest
 
 | Arquivo | Função |
 |---------|--------|
-| `src/dictate` | Porta de entrada (bootstrap do venv + `jrwhisper.cli.main`) |
+| `src/dictate` | Porta de entrada (bootstrap do venv + `jrwhisper.cli.main`); chamado pelo lançador `~/.local/bin/dictate` |
 | `src/jrwhisper/` | Pacote. Núcleo: `config`, `audio` (captura, calibração por mic, Yeti), `transcribe` (Whisper/daemon/RNNoise), `dictation` (laço de sessão: PTT, mãos livres), `pipeline` (perfil → modo IA → formatação → IA → atalhos de texto), `textproc`, `learning` (correção da revisão → regra do dicionário), `context` (campo em foco via AT-SPI + seleção recente), `style` (estilo de e-mail estudado do vault), `lexicon` (jargão de logística → Whisper, pistas e traduções da IA), `vault` (cópia no Obsidian), `paste`, `profiles`, `ai`, `history`, `ptt`, `shortcuts` (dconf), `secrets` (keyring), `cli` |
-| `src/jrwhisper/ui/` | `theme` (tokens macOS, ícone padrão das janelas, componentes inset-grouped, PopupChoice, Swatch), `visuals` (Orbe de plasma/Ondas/Barras + FFT), `overlay` (HUD em Cairo), `captionview` (legendas: blocos, rolagem, efeito lente; também a prévia dos Ajustes), `settings` (10 abas), `calibration`, `history_search` (Spotlight) |
+| `src/jrwhisper/ui/` | `theme` (tokens macOS, ícone padrão das janelas, componentes inset-grouped, PopupChoice, Swatch), `visuals` (Orbe de vidro/Ondas de luz/Barras espelhadas + FFT; vidro dos cartões `CARD`/`card`), `overlay` (HUD em Cairo: pontinhos e faixa de luz de trabalho), `captionview` (legendas: blocos, rolagem, frase em foco estável; também a prévia dos Ajustes), `settings` (10 abas), `calibration`, `history_search` (Spotlight) |
 | `assets/fonts/` | Inter variável (OFL), instalada pelo `install.sh` |
 | `assets/icons/jrwhisper.svg` | Ícone do app (dock/menu). `install.sh` instala no hicolor + `jrwhisper.desktop` com `StartupWMClass=dictate` (é assim que o Plank casa a janela) |
-| `scripts/install.sh` | One-line installer (curl | bash) |
+| `scripts/install.sh` | One-line installer (curl \| bash) |
+| `scripts/dictate-launcher.sh` | Lançador copiado para `~/.local/bin/dictate`: acha o repositório movido/renomeado |
+| `scripts/ollama-container.sh` | Cria o `jrwhisper-ollama` (porta 11435, GPU, reinício automático); idempotente |
 | `config/config.json` | Configuração padrão (não trackeada no git) |
 | `config/dictate-daemon.service` | Serviço systemd para modo daemon |
-| `tests/` | Testes manuais (ainda sem pytest automatizado) |
-| `docs/` | Documentação complementar |
+| `tests/` | Testes em script com assert (sem pytest). Herméticos: captions, capture_prebuffer, choices, formatter, launcher, learning, lexicon, mic_calibration, pipeline, ptt, style, vault, visuals (rodar com `XDG_RUNTIME_DIR` temporário). `render_overlay.py` (prints + `--bench`) e `render_windows.py` (Ajustes/busca/calibração fora da tela) |
+| `docs/` | `architecture.md` (processos, módulos, fluxos), `configuration.md` (cada chave do config), `changelog.md`, `licenses.md`, `img/` (prints gerados pelos scripts de render) |
 
 ## Ambiente de Execução
 

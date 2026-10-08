@@ -1,6 +1,6 @@
-# 🎤 JRWhisperLinux
+# JRWhisperLinux
 
-> Fale. O texto aparece onde você está. Ditado por voz para Linux, roda na sua máquina, offline.
+> Fale. O texto aparece onde você está. Ditado por voz para Linux que roda na sua máquina.
 
 <p align="center">
   <a href="https://jrwhisper.jasonrock.dev"><img src="https://img.shields.io/badge/Site-jrwhisper.jasonrock.dev-F59E0B?style=flat-square" alt="Site"></a>
@@ -10,88 +10,23 @@
   <img src="https://img.shields.io/badge/GPU-CUDA-76B900?style=flat-square&logo=nvidia" alt="CUDA">
 </p>
 
----
+<p align="center"><img src="docs/img/overlay-orbe.png" width="360" alt="Overlay ouvindo: orbe de vidro reagindo à voz, texto parcial com pontinhos"></p>
 
-## O que é
+Aperte o atalho, fale e aperte de novo. O Whisper transcreve na sua GPU, o texto é formatado (e, se você quiser, reescrito por IA) e colado no campo onde está o cursor. A voz não sai do computador.
 
-JRWhisperLinux captura áudio do microfone, transcreve com um modelo de IA rodando localmente e cola o texto no campo ativo. Aperte Super+Shift+V, fale, e o texto aparece onde você está. Sua voz nunca sai da sua máquina.
+**Sumário:** [Instalação](#instalação) · [Uso](#uso) · [Atalhos](#atalhos) · [Recursos](#recursos) · [Ajustes](#ajustes) · [Linha de comando](#linha-de-comando) · [Privacidade](#privacidade) · [Arquivos e serviços](#arquivos-e-serviços) · [Problemas comuns](#problemas-comuns) · [Desenvolvimento](#desenvolvimento) · [Licenças](#licenças)
 
----
-
-## Tecnologias
-
-| Camada | Tecnologia | O que faz |
-| :--- | :--- | :--- |
-| **IA** | `faster-whisper` (turbo) | Transcrição local em GPU NVIDIA (CUDA int8_float16) ou CPU (int8). |
-| **Voz** | `RNNoise` via FFmpeg `arnndn` | Rede neural que separa sua voz do ruído ambiente — teclado, música, conversa de fundo. |
-| **Visual** | GTK3 / Cairo / Pango | Janela overlay translúcida com VU meter e texto ao vivo. |
-| **Áudio** | PulseAudio / PipeWire (`parec`) | Captura em 16kHz mono com 30ms de latência. |
-| **Input** | `xdotool` / `wtype` / `xclip` / `wl-clipboard` | Detecta X11 ou Wayland e injeta o texto na janela ativa. |
-
----
-
-## 🚀 Principais Recursos
-
-Minimalista por padrão: um atalho, um orbe que reage à sua voz, o texto colado onde o cursor está. Os recursos avançados ficam em **Ajustes** (`dictate -s`), cada um com seu próprio interruptor.
-
-### Essencial
-* **Um atalho, dois toques:** o primeiro começa a ouvir; o segundo encerra e transcreve na hora (antes de você falar, cancela). Nada do que foi dito se perde.
-* **Latência zero:** o modelo Whisper fica carregado na GPU por um serviço (`$XDG_RUNTIME_DIR/dictate_daemon.sock`); a captura começa assim que o atalho é pressionado. Trocar o modelo nos Ajustes vale no próximo ditado, sem reiniciar nada.
-* **Comandos de voz:** "vírgula", "ponto final", "nova linha", "novo parágrafo"… mesmo quando o Whisper já pontuou o comando, sai uma pontuação só.
-* **Overlay em três estilos:** Orbe (padrão, esfera de plasma com o mic no centro), Ondas ou Barras de espectro. Cor de destaque, tamanho, posição, brilho e "reduzir movimento" ajustáveis, com pré-visualização ao vivo. Aparece no monitor onde está o mouse e não bloqueia cliques.
-* **Isolamento de voz:** RNNoise limpa música, ventilador e teclado antes da transcrição; o que estiver tocando no computador (navegador, Spotify…) é pausado durante o ditado e retomado depois.
-* **Detecção de fala com histerese:** 150 ms para confirmar que você começou e uma pausa configurável para encerrar.
-* **Calibração por microfone:** medidor ao vivo com espectro; cada mic guarda o próprio limiar. Sem o mic preferido, usa o padrão do sistema e avisa.
-
-### Avançado (Ajustes)
-* **Reescrita com IA:** modos Corrigir, E-mail, Mensagem, Inglês e Tópicos (editáveis). Ative dizendo "modo e-mail, …" no começo, por atalho próprio (`dictate --mode email`) ou por aplicativo. NVIDIA NIM (nuvem) ou Ollama (local). Com a IA ligada, o texto não é colado sozinho: fica na tela, qualquer palavra pode ser corrigida com um clique (Enter confirma, Esc cancela), e há botões para trocar de modo (ou voltar ao original), colar, copiar ou descartar. Pelo teclado: Enter cola, Esc descarta, Ctrl+C copia, 1–9 trocam o modo; o 2º toque no atalho também cola. Texto longo rola com a roda do mouse. No modo mãos livres ele continua colando direto. Se a IA falhar, aparece o texto original.
-* **Perfis por aplicativo:** terminais colam com Ctrl+Shift+V, em minúscula e sem ponto final; chat sem ponto final; e-mail com pontuação completa. Regras editáveis por classe de janela.
-* **Atalhos de texto:** diga "minha assinatura" e o bloco inteiro entra no lugar.
-* **Histórico:** local (0600), com retenção configurável e busca estilo Spotlight (`dictate --history`; Enter cola).
-* **Som do computador:** transcreve o que está tocando (vídeo do YouTube, reunião) direto da saída de áudio, sem passar pelo microfone. Escolha "Som do computador" em Ajustes → Microfone ou use `dictate --system` com atalho próprio; não pausa nas pausas do vídeo, termina no 2º toque ou na duração máxima.
-* **Legendas ao vivo:** `dictate --captions` (ou o atalho em Ajustes → Reconhecimento) legenda o som do computador enquanto toca, traduzido para português, inglês ou espanhol. Inglês sai do próprio Whisper (local); os outros idiomas usam o provedor de IA. A prévia aparece ~0,5–1 s depois da fala e é traduzida enquanto cresce (~1,5–3 s com a NVIDIA; mais rápido com Ollama local); no fim, a legenda inteira fica copiada.
-* **Push-to-talk:** segure o atalho para falar e solte para enviar (X11).
-* **Mãos livres:** depois de colar, volta a ouvir; para com "parar ditado", silêncio longo ou o atalho (que antes transcreve o trecho em andamento).
-
-## Para quem serve
-
-| Perfil | Uso |
-|--------|-----|
-| **Desenvolvimento** | Escreva comentários, commits e documentação sem tirar as mãos do teclado |
-| **Produção de texto** | Artigos, correspondência e relatórios — falar é mais rápido que digitar |
-| **Acessibilidade** | Alternativa ao teclado para LER, tendinite ou limitações motoras |
-| **Português brasileiro** | 95% de acurácia com o modelo turbo; vocabulário customizável por domínio |
-
-## 💻 Compatibilidade
-
-| Distro | Status |
-|--------|--------|
-| Linux Mint 22 (Cinnamon) | ✅ **Ambiente primário de desenvolvimento** |
-| Linux Mint 21 | ✅ Suportado |
-| Ubuntu 24.04 | ✅ Suportado (GNOME, X11/Wayland) |
-| Ubuntu 22.04 | ✅ Suportado |
-| Debian 12 | ✅ Suportado |
-| Fedora 38+ | ⚠️ Instalação manual (use `dnf`) |
-| Arch Linux | ⚠️ Instalação manual (use `pacman`) |
-
-**Desktops:** Cinnamon (atalho automático), GNOME, XFCE, KDE · **Display:** X11 (nativo), Wayland (suportado)
-**Pré-requisitos:** Python 3.10+, 4GB RAM, 2GB disco · GPU NVIDIA opcional (acelera 10x)
+Documentação complementar: [arquitetura](docs/architecture.md) · [todas as configurações](docs/configuration.md) · [changelog](docs/changelog.md) · [auditoria de licenças](docs/licenses.md)
 
 ---
 
 ## Instalação
 
-### Via script (recomendado)
-
 ```bash
 curl -fsSL https://jrwhisper.jasonrock.dev/install.sh | bash
 ```
 
-Instala tudo automaticamente: dependências do sistema, ambiente Python, atalho de teclado, daemon e pré-carrega o modelo. Funciona em qualquer Debian/Ubuntu/Mint.
-
-Pressione **Super+Shift+V** e comece a ditar. Pronto.
-
-### Manual (via Git)
+Ou a partir do repositório:
 
 ```bash
 git clone https://github.com/jaisonrocha-ship-it/jrwhisperlinux.git
@@ -99,144 +34,264 @@ cd jrwhisperlinux
 bash scripts/install.sh
 ```
 
----
+O instalador (Debian, Ubuntu e Mint):
 
-## ⚙️ Configuração do Sistema (Modo Daemon e Atalho)
+| Etapa | O que faz |
+|---|---|
+| Pacotes do sistema | GTK3, librsvg, AT-SPI, `pulseaudio-utils`, `xdotool`/`xclip` (X11), `wtype`/`wl-clipboard` (Wayland), `ffmpeg`, `libsecret-tools`, `dconf-cli` |
+| Ambiente Python | venv em `~/.local/share/dictation-venv` com `faster-whisper` (reaproveitado numa atualização) |
+| Comando `dictate` | Lançador em `~/.local/bin/dictate` que acha o repositório mesmo se ele for movido |
+| Configuração | `~/.config/dictate/config.json` (mantém a existente) e o modelo RNNoise |
+| Fonte e ícone | Inter variável e o ícone do app no menu e na dock |
+| Atalho | `Super+Shift+V` no Cinnamon (em outros desktops, configure apontando para `~/.local/bin/dictate`) |
+| Serviço | `dictate-daemon` (systemd do usuário): mantém o Whisper carregado na GPU desde o login |
+| IA local | Contêiner Docker `jrwhisper-ollama` em `127.0.0.1:11435`, com GPU e reinício automático (se houver Docker) |
 
-### 1. Iniciar o Servidor Daemon com o Systemd
+**Requisitos:** Python 3.10+, 4 GB de RAM, 2 GB de disco. GPU NVIDIA opcional (transcrição ~10× mais rápida). IA local opcional: Docker e ~5 GB de VRAM livre para o qwen2.5.
 
-Para ter latência zero no acionamento, configure o Daemon para carregar o modelo de voz assim que você logar no computador:
+| Sistema | Situação |
+|---|---|
+| Linux Mint 22 (Cinnamon, X11) | Ambiente principal de desenvolvimento |
+| Linux Mint 21, Ubuntu 22.04/24.04, Debian 12 | Suportados |
+| Fedora 38+, Arch | Instalação manual (`dnf`/`pacman`) |
+| Wayland | Suportado (overlay via XWayland, injeção com `wtype`) |
 
-1. Copie o arquivo de serviço para a pasta do systemd de usuário:
-   ```bash
-   mkdir -p ~/.config/systemd/user/
-   cp config/dictate-daemon.service ~/.config/systemd/user/
-   ```
-2. Ative e inicie o serviço:
-   ```bash
-   systemctl --user enable dictate-daemon.service
-   systemctl --user start dictate-daemon.service
-   ```
-3. Verifique o status:
-   ```bash
-   dictate --status
-   ```
-
-### 2. Configurar o Atalho de Teclado Global
-
-No painel de controle da sua distribuição (ex: Configurações do Sistema -> Teclado -> Atalhos Personalizados):
-* **Nome:** Ditado JRWhisper
-* **Comando:** `~/.local/bin/dictate` (ou o caminho onde o script foi instalado)
-* **Atalho:** `Super+Shift+V` (ou o de sua preferência)
-
-### 3. Calibrar o Microfone (opcional)
-
-Abra **Configurações → Áudio & Captação → Calibrar…** (ou `dictate --calibrate-gui`). A janela mostra o nível do mic ao vivo em dBFS, mede 3 s de silêncio e 5 s de fala e salva o limiar **por microfone**. No terminal: `dictate --calibrate`.
-
-* Cada mic guarda a própria calibração. Sem calibração, o ditado mede o ruído a cada uso (automático).
-* Se o mic configurado estiver desconectado, o ditado usa o mic padrão do sistema e avisa no overlay.
-* Yeti GX com `yeti-ctl` (controle HID++ do ganho) em `~/dev/yeti-ctl`: a calibração registra o ganho de hardware; se ele mudar mais de 5 unidades, o ditado volta ao automático até você recalibrar.
+Tudo sobrevive a um reinício: o serviço sobe no login, o contêiner da IA local sobe com o Docker e os atalhos ficam gravados no desktop.
 
 ---
 
-## 📝 Arquivo de Configuração (`config.json`)
+## Uso
 
-As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâmetros disponíveis:
+1. **Toque no atalho.** O overlay aparece no monitor onde está o mouse, mede o ruído e mostra "Aguardando voz…".
+2. **Fale.** O orbe reage à sua voz e o texto parcial aparece por cima, com três pontinhos indicando que ainda está ouvindo.
+3. **Pare de falar ou toque de novo.** Depois de 2,5 s de pausa (ajustável) ou no 2º toque, o áudio é transcrito, formatado e colado onde estava o cursor.
 
-```json
-{
-  "model": "medium",
-  "language": "pt",
-  "mic_device": "easyeffects_source",
-  "silence_threshold": 0,
-  "silence_duration": 1.7,
-  "listen_timeout": 15,
-  "max_duration": 60,
-  "noise_suppression": true,
-  "voice_commands": true,
-  "remove_fillers": true
-}
+O 2º toque nunca descarta o que você falou: antes de falar, cancela; falando, encerra e transcreve; na revisão, cola.
+
+Com a **reescrita por IA** ligada, o texto não é colado sozinho. Ele fica na tela para revisão:
+
+<p align="center"><img src="docs/img/revisao-ia.png" width="360" alt="Revisão com IA: texto, modos de reescrita e ações"></p>
+
+- Clique em qualquer palavra para corrigi-la (Enter confirma, Esc cancela). A correção ganha um selo **Lembrar** e vira regra do dicionário ao colar.
+- Troque o modo (Bruto, Original, Corrigir, E-mail, Mensagem, Inglês, Tópicos) e o texto é refeito.
+- **Continuar** volta a ouvir e acrescenta o que você falar no fim, refazendo o texto todo no modo atual.
+- Enquanto a IA trabalha, uma faixa de luz atravessa o texto.
+
+---
+
+## Atalhos
+
+### Globais (configuráveis em Ajustes)
+
+| Atalho | Ação | Onde mudar |
+|---|---|---|
+| `Super+Shift+V` (padrão do instalador) | Ditar; de novo: encerra e transcreve | Geral → Atalho de ditado |
+| definido por você | Transcrever o som do computador (vídeo, reunião) | Microfone → Atalho: som do computador |
+| definido por você | Legendas ao vivo do som do computador, traduzidas | Reconhecimento → Atalho das legendas |
+| definido por você | Busca rápida no histórico (estilo Spotlight) | Histórico → Busca rápida |
+| definido por você | Ditar já num modo de IA: comando `dictate --mode email` | Atalho do sistema |
+
+Com **Push-to-talk** ligado (X11), segure o atalho de ditado enquanto fala e solte para transcrever. Um toque rápido continua funcionando como antes.
+
+### Revisão com IA
+
+| Tecla | Ação |
+|---|---|
+| `Enter` | Colar |
+| `Shift+Enter` | Colar e enviar (a tecla de envio é por perfil: Enter ou Ctrl+Enter no e-mail) |
+| `Espaço` | Continuar ditando no fim do texto |
+| `Esc` | Descartar |
+| `Ctrl+C` | Copiar sem colar |
+| `0` | Bruto: a saída pura do Whisper |
+| `1` | Original: formatado, sem IA |
+| `2`–`9` | Modos de IA, na ordem dos chips |
+| Roda do mouse | Rolar texto longo |
+| Clique numa palavra | Corrigir a palavra |
+| 2º toque no atalho | Colar |
+
+Colar e enviar só acontece por tecla ou clique, nunca por voz.
+
+### Legendas ao vivo
+
+| Tecla | Ação |
+|---|---|
+| Roda do mouse | Pausa e rola para reler; "↓ ao vivo" volta, ou volta sozinho em 8 s |
+| 2º toque no atalho | Encerra; a legenda inteira fica copiada |
+
+### Busca rápida
+
+| Tecla | Ação |
+|---|---|
+| Digitar | Filtra por texto ou aplicativo |
+| `↑` `↓` | Escolhe |
+| `Enter` | Cola na janela que estava ativa |
+| `Ctrl+C` | Copia |
+| `Esc` | Fecha |
+
+### Comandos de voz
+
+| Diga | Sai |
+|---|---|
+| "vírgula", "ponto final", "ponto e vírgula", "dois pontos" | `,` `.` `;` `:` |
+| "ponto de interrogação", "ponto de exclamação" | `?` `!` |
+| "nova linha", "novo parágrafo" | quebra de linha, parágrafo |
+| "modo e-mail, …" (no início) | dita naquele modo de IA (vale para qualquer modo ativo) |
+| "chego às 2, não, na verdade às 3" (com IA) | "Chego às 3." (também "quer dizer", "aliás", "corrigindo") |
+| "parar ditado" (mãos livres) | encerra o modo contínuo (frase ajustável) |
+| um atalho de texto, ex.: "minha assinatura" | o bloco inteiro cadastrado |
+
+Mesmo quando o Whisper já pontuou o comando ("Olá vírgula, tudo"), sai uma pontuação só. Hesitações ("hmm", "ahn", "éh", "uh") são removidas.
+
+---
+
+## Recursos
+
+### Ditado
+- **Latência mínima:** o Whisper fica carregado na GPU pelo serviço; a captura começa no toque. O pré-buffer de 300 ms não corta a primeira sílaba.
+- **Detecção de fala com histerese:** 150 ms de voz para começar; qualquer trecho de voz zera a pausa, então pausas curtas para pensar não encerram o ditado.
+- **Isolamento de voz:** RNNoise limpa teclado, ventilador e música antes da transcrição. Música e vídeos tocando são pausados (MPRIS) e o volume do sistema abaixa durante o ditado; tudo volta depois.
+- **Calibração por microfone:** cada mic guarda o próprio limiar. No Yeti GX, a calibração registra o ganho de hardware e avisa se ele mudar. Mic desconectado: usa o padrão do sistema e avisa.
+- **Idioma:** português, inglês ou automático (escolhe só entre os idiomas que você usa).
+- **Música e canto:** se a passada normal não achar fala, uma 2ª passada sem filtros tenta de novo; alucinações conhecidas do Whisper em ruído são descartadas.
+
+### Visual
+<p align="center"><img src="docs/img/overlay-ondas.png" width="300" alt="Estilo Ondas"> <img src="docs/img/overlay-barras.png" width="300" alt="Estilo Barras"></p>
+
+- **Três estilos:** Orbe (vidro translúcido com plasma, cresce e acende com a voz), Ondas (fitas de luz, uma por faixa de frequência) e Barras (espectro espelhado, graves no centro, picos que caem devagar).
+- **Feedback de trabalho:** pontinhos no fim do texto parcial; faixa de luz passando pelo texto ao transcrever ou reescrever.
+- **Ajustável:** cor de destaque (5 cores ou uma personalizada), tamanho, posição (embaixo, centro, topo), brilho, mostrar texto e "reduzir movimento". Pré-visualização ao vivo nos Ajustes.
+- **Não atrapalha:** o overlay não recebe cliques (só a engrenagem e os botões da revisão), aparece no monitor do mouse e é desenhado inteiro em Cairo, nítido em telas HiDPI.
+
+### Inteligência (opcional)
+- **Fila de IAs, grátis e rápidas primeiro:** local (qwen2.5 no Ollama, ~0,2 s) → NVIDIA Nemotron (~0,5 s) → DeepSeek (~0,9 s). Cada uma tem 3 s; o texto original só é colado se todas falharem. A revisão mostra "via NVIDIA/DeepSeek" quando o texto saiu do computador.
+- **IA local sempre pronta:** o modelo fica carregado por 30 min depois do último uso e começa a carregar quando você começa a falar, se couber na GPU (VRAM livre e placa abaixo de 85 °C). Roda num Ollama próprio do ditado.
+- **Modos editáveis:** Corrigir, E-mail, Mensagem, Inglês e Tópicos, com o prompt de cada um. Modo padrão, ativação por voz ("modo e-mail, …") e modo por aplicativo.
+- **Contexto do campo em foco:** app, janela, rótulo do campo e o texto selecionado (só se selecionado há menos de 2 min). Serve para nomes e coerência, nunca muda o modo nem o tom. Desliga por ditado num clique no chip "Contexto".
+- **Meu estilo nos e-mails:** `dictate --study-style` lê os e-mails enviados de pastas do seu vault e escreve a nota "Meu estilo de escrita"; os modos de e-mail escrevem como você. Nomes e números de clientes não entram na nota.
+- **Léxico de logística:** jargão do glossário que você usa vai para o vocabulário do Whisper; a IA recebe pistas de termos mal transcritos ("laitime" → "laytime") e traduções curadas para o modo Inglês e as legendas.
+- **Aprende com as correções:** palavra corrigida na revisão vira regra do dicionário (e nome próprio vira vocabulário do Whisper). Palavra comum e sigla trocada por sigla só viram regra na 2ª correção igual.
+
+### Texto
+- **Formatação automática:** maiúsculas, espaços e ponto final.
+- **Dicionário:** palavra ouvida → palavra escrita ("bl" → "B/L").
+- **Atalhos de texto:** gatilho falado → bloco de texto (aceita várias linhas).
+- **Perfis por aplicativo:** terminais colam com Ctrl+Shift+V, sem maiúscula nem ponto; chat sem ponto final; e-mail com pontuação completa e envio com Ctrl+Enter. Regras por classe de janela, com modo de IA próprio.
+
+### Som do computador e legendas
+<p align="center"><img src="docs/img/legendas.png" width="560" alt="Legendas ao vivo com frase em foco"></p>
+
+- **Transcrever o que está tocando** (vídeo, reunião) direto da saída de áudio, sem microfone. Pausas do vídeo não encerram; termina no 2º toque ou na duração máxima.
+- **Legendas ao vivo traduzidas** para português, inglês ou espanhol. A prévia aparece ~0,5–1 s depois da fala. A frase mais nova fica maior e parada numa faixa fixa; as anteriores sobem menores e esmaecem. Tradutor: automático (DeepSeek → NVIDIA → Ollama), um deles fixo, ou o Hunyuan MT local. Em inglês, o próprio Whisper traduz.
+
+### Histórico
+<p align="center"><img src="docs/img/busca-rapida.png" width="460" alt="Busca rápida no histórico"></p>
+
+- **Local e privado** (`0600`), com retenção configurável e busca rápida.
+- **Áudio de cada ditado** em Opus (~16 MB por hora de fala), apagado junto com a entrada: base para re-transcrever e treinar.
+- **Cópia no Obsidian:** uma nota por dia na pasta escolhida do vault, com hora, app, modo, o texto e o bruto recolhido. Legendas entram em parágrafos.
+
+### Mãos livres
+Depois de colar, volta a ouvir sozinho. Para com a frase de parada, depois de 20 s sem fala (ajustável) ou no atalho, que antes transcreve o trecho em andamento.
+
+---
+
+## Ajustes
+
+`dictate -s` abre os Ajustes (ou pelo menu do sistema, ou pela engrenagem do overlay). Tudo vale na hora, sem botão de salvar.
+
+<p align="center"><img src="docs/img/ajustes-aparencia.png" width="640" alt="Ajustes: aba Aparência"></p>
+
+| Aba | O que tem |
+|---|---|
+| **Geral** | Atalho de ditado, idioma, sons de início e fim, serviço que mantém o modelo carregado |
+| **Aparência** | Estilo (Orbe, Ondas, Barras), cor de destaque, tamanho, posição, brilho, mostrar texto, reduzir movimento |
+| **Microfone** | Entrada (ou som do computador), nível ao vivo, atalho do som do computador, calibração, supressão de ruído, pausar mídia, abaixar o som e volume durante o ditado |
+| **Reconhecimento** | Modelo Whisper, legendas ao vivo (idioma, tradutor, atalho), aparência da legenda (linhas, frase em foco, aumento, posição), vocabulário, pausa para encerrar, espera e duração máxima |
+| **Texto** | Formatação, hesitações, comandos de voz, aprender com as correções, dicionário, atalhos de texto, léxico de logística |
+| **Inteligência** | Reescrita com IA, ordem da fila, Ollama (endereço e modelo), chaves e modelos da NVIDIA e da DeepSeek, testar conexão, modos, modo padrão, ativar por voz, contexto, meu estilo e fontes do estilo |
+| **Aplicativos** | Perfis por aplicativo: como colar, modo de IA e tecla de envio |
+| **Histórico** | Cópia no Obsidian, guardar histórico, retenção, guardar o áudio, busca rápida e a lista dos ditados |
+| **Mãos livres** | Push-to-talk, mãos livres, tempo para encerrar, frase de parada |
+| **Avançado** | Limite manual de fala, filtros do Whisper, VRAM mínima, logs, restaurar padrões |
+
+Cada chave do `config.json` está descrita em [docs/configuration.md](docs/configuration.md).
+
+---
+
+## Linha de comando
+
+| Comando | O que faz |
+|---|---|
+| `dictate` | Dita. De novo: encerra e transcreve |
+| `dictate --mode <id>` | Dita já num modo de IA (`corrigir`, `email`, `mensagem`, `ingles`, `topicos`) |
+| `dictate --system` | Transcreve o som do computador e cola |
+| `dictate --captions` | Legendas ao vivo do som do computador, traduzidas |
+| `dictate --history` | Busca rápida no histórico |
+| `dictate -s [aba]` | Ajustes (`general`, `appearance`, `microphone`, `recognition`, `text`, `ai`, `apps`, `history`, `handsfree`, `advanced`) |
+| `dictate --calibrate-gui` | Calibração com medidor ao vivo |
+| `dictate --calibrate` | Calibração no terminal |
+| `dictate --study-style` | Estuda seus e-mails enviados e escreve "Meu estilo de escrita" |
+| `dictate --build-lexicon` | Recria o "Léxico de logística" |
+| `dictate --status` | Versão, modelo, GPU, microfone, calibração e estado do serviço |
+| `dictate --config` | Config efetivo em JSON |
+| `dictate --daemon` | Serviço que mantém o modelo carregado (o systemd já cuida dele) |
+
+---
+
+## Privacidade
+
+- **A voz nunca sai do computador.** Captura, RNNoise e Whisper rodam localmente.
+- **A IA é opcional e desligada por padrão.** Com o Ollama local, nada sai. Com NVIDIA ou DeepSeek, só o texto transcrito (e o contexto do campo, se ligado) vai para a API escolhida; a revisão avisa quando isso aconteceu.
+- **Chaves de API ficam no chaveiro do sistema** (gnome-keyring via `secret-tool`), nunca no config, no código ou no log.
+- **Histórico, áudios e logs são só seus:** `~/.local/share/dictate` com permissão `0600`/`0700`; áudios temporários e socket em `$XDG_RUNTIME_DIR` (memória, por usuário), nunca em `/tmp`.
+- **O estilo de e-mail** é estudado com a IA local e filtra nomes e números de clientes; o texto selecionado (contexto) nunca vai para a nota do Obsidian.
+
+---
+
+## Arquivos e serviços
+
+| Caminho | Conteúdo |
+|---|---|
+| `~/.local/bin/dictate` | Lançador; o caminho do repositório fica em `~/.config/dictate/repo` |
+| `~/.config/dictate/config.json` | Configuração (escrita atômica, aplicada na hora) |
+| `~/.local/share/dictate/` | Histórico (`history.jsonl`) e áudios (`audio/`) |
+| `~/.local/share/dictation-venv/` | Ambiente Python |
+| `$XDG_RUNTIME_DIR/dictate_*` | Socket e PID do serviço, log de depuração, WAVs temporários |
+| `~/.config/systemd/user/dictate-daemon.service` | Serviço do Whisper (`systemctl --user status dictate-daemon`) |
+| Contêiner `jrwhisper-ollama` | IA local em `127.0.0.1:11435` (`docker logs jrwhisper-ollama`) |
+
+---
+
+## Problemas comuns
+
+| Sintoma | Causa e solução |
+|---|---|
+| Nada é transcrito / "sem áudio" | Mic mutado ou ganho de hardware zerado (no Yeti GX, o ganho fica no OBSBOT Control e o ALSA não enxerga). Rode `dictate --calibrate-gui`: voz normal fica entre −20 e −50 dBFS. |
+| O ditado encerra cedo ou não encerra | Recalibre o mic; ajuste "Pausa para encerrar" (Reconhecimento) ou o limite manual (Avançado). |
+| Transcrição lenta | `dictate --status` mostra se o serviço está ativo e se está na GPU. Sem `libcublas.so.12`, cai para a CPU; com pouca VRAM, também. |
+| A IA vai sempre para a nuvem | O Ollama do ditado precisa estar de pé (`docker ps`) e com o modelo instalado (`docker exec jrwhisper-ollama ollama pull qwen2.5`). Com a placa quente (≥85 °C) ou sem VRAM, a fila pula o local de propósito. |
+| O primeiro teste da IA local é lento | É o carregamento do modelo (2–12 s). Durante o ditado ele carrega enquanto você fala. |
+| O atalho não faz nada | `~/.local/bin/dictate --status` no terminal. Se o repositório foi apagado, rode `scripts/install.sh` de novo; se foi só movido, o lançador se corrige sozinho. |
+| Overlay sem transparência | É preciso um compositor ativo (Cinnamon, GNOME e KDE já têm). |
+
+O log de depuração fica em `$XDG_RUNTIME_DIR/dictate_debug.log` (Ajustes → Avançado → Logs).
+
+---
+
+## Desenvolvimento
+
+```bash
+VENV=~/.local/share/dictation-venv/bin/python3
+for t in tests/test_*.py; do $VENV $t; done                  # suíte (alguns testes usam mic, GPU ou o serviço)
+XDG_RUNTIME_DIR=$(mktemp -d) $VENV tests/render_overlay.py pasta/   # prints de todos os estados do overlay
+XDG_RUNTIME_DIR=$(mktemp -d) $VENV tests/render_overlay.py --bench  # custo por quadro de cada estilo
+XDG_RUNTIME_DIR=$(mktemp -d) $VENV tests/render_windows.py pasta/   # prints dos Ajustes, busca e calibração
 ```
 
-* **`model`:** Modelo do faster-whisper. Recomenda-se `medium` para pt-BR (excelente relação velocidade/acurácia).
-* **`mic_device`:** Dispositivo de captura. Use `"easyeffects_source"` para passar pelo EasyEffects, ou `"@DEFAULT_SOURCE@"` para capturar o microfone padrão do sistema diretamente.
-* **`silence_duration`:** Segundos de silêncio necessários para autocompletar e colar o texto (padrão: `1.7`s).
-* **`noise_suppression`:** Habilita o isolamento neural RNNoise integrado via FFmpeg.
+Os testes herméticos (sem microfone, GPU ou serviço) são: `captions`, `capture_prebuffer`, `choices`, `formatter`, `launcher`, `learning`, `lexicon`, `mic_calibration`, `pipeline`, `ptt`, `style`, `vault` e `visuals`. Rode-os com `XDG_RUNTIME_DIR` temporário para não escrever no log real. `AGENTS.md` traz as regras do projeto e as armadilhas conhecidas; [docs/architecture.md](docs/architecture.md) explica como as peças se encaixam.
 
 ---
 
-## 🔍 Resolução de Problemas (Troubleshooting)
+## Licenças
 
-### O atalho não abre o overlay
-* Certifique-se de que dependências como `python3-gi` estão instaladas no sistema.
-* Verifique se o daemon está travado ou se o arquivo de lock `$XDG_RUNTIME_DIR/dictate.pid` ficou órfão.
-
-### Erro de VRAM / Carregamento CUDA
-* Se você receber erros relativos a `libcublas.so.12` ausente, o script fará fallback automático para CPU. Para usar a GPU, certifique-se de instalar os pacotes CUDA apropriados ou configure caminhos de bibliotecas compatíveis no driver.
-
----
-
-## 🔓 Stack Completa & Licenças — 100% Open Source
-
-**JRWhisperLinux é software livre.** Cada dependência foi auditada. Nenhum componente proprietário ou código fechado.
-
-### Python (pip) — Todas MIT/BSD/Apache 2.0
-
-| Pacote | Licença | Função |
-|--------|---------|--------|
-| `faster-whisper` | MIT | Transcrição via CTranslate2 (SYSTRAN) |
-| `ctranslate2` | MIT | Inferência otimizada GPU/CPU |
-| `onnxruntime` | MIT | Runtime de redes neurais |
-| `numpy` | BSD 3-Clause | Processamento de áudio, arrays |
-| `huggingface-hub` | Apache 2.0 | Download de modelos |
-| `PyAV` | BSD 3-Clause | Binding Python para FFmpeg |
-| `tqdm` | MIT + MPL 2.0 | Barras de progresso |
-| `requests` *(apt)* | Apache 2.0 | Cliente da reescrita por IA |
-| `python-xlib` *(apt)* | LGPL 2.1+ | Push-to-talk (estado do teclado no X11) |
-
-### Interface (sistema) — Todas LGPL/MPL
-
-| Componente | Licença | Função |
-|------------|---------|--------|
-| PyGObject (GTK3) | LGPL 2.1+ | Overlay visual |
-| Pango | LGPL 2.1 | Renderização de texto |
-| Cairo | LGPL 2.1 / MPL 1.1 | Gráficos vetoriais |
-| Inter (fonte, embarcada) | SIL OFL 1.1 | Tipografia da interface |
-| Lucide (ícones, embutidos) | ISC | Ícones da interface |
-
-### Sistema (apt) — Ferramentas externas, não bundadas
-
-| Ferramenta | Licença | Função |
-|------------|---------|--------|
-| `xdotool` | BSD | Injeção de texto (X11) |
-| `wtype` | MIT | Injeção de texto (Wayland) |
-| `xclip` | GPL 2 | Clipboard X11 *(externo)* |
-| `wl-clipboard` | GPL 3 | Clipboard Wayland *(externo)* |
-| `ffmpeg` | LGPL/GPL | Processamento de áudio *(externo)* |
-| PulseAudio | LGPL 2.1 | Captura de microfone |
-| PipeWire | LGPL 2.1 | Servidor de áudio moderno |
-| `libsecret-tools` | LGPL 2.1 | Chave de API no chaveiro do sistema |
-
-> ⚠️ xclip, wl-clipboard e ffmpeg têm licenças GPL, mas são **dependências externas de sistema** — o usuário as instala via `apt`, não são bundadas no projeto. O JRWhisperLinux em si (MIT) não herda obrigações de copyleft.
-
-### Modelos de Rede Neural
-
-| Modelo | Licença |
-|--------|---------|
-| Whisper (OpenAI) | MIT |
-| RNNoise Models | Domínio Público |
-| Silero VAD | MIT |
-
-> A reescrita por IA é opcional e desligada por padrão. Com a NVIDIA NIM, o texto ditado vai para a API da NVIDIA (serviço externo, sujeito aos termos dela); com o Ollama, tudo fica no computador.
-
-### Auditoria
-
-- **Data:** 24/07/2026
-- **Método:** `pip show` para cada pacote Python + verificação de licenças de sistema
-- **Resultado:** ✅ Zero código proprietário. Zero dependência fechada. Zero restrições de uso comercial.
-
----
-
-## 📄 Licença
-
-Este projeto é disponibilizado sob a **Licença MIT**. Sinta-se livre para usar, modificar e distribuir.
+O JRWhisperLinux é MIT. Todas as dependências obrigatórias são livres (MIT, BSD, Apache 2.0, LGPL); os modelos de IA local opcionais têm a licença de cada um (o qwen2.5 é Apache 2.0). As ferramentas GPL (`xclip`, `wl-clipboard`, `ffmpeg`) são programas externos do sistema, não distribuídos com o projeto. Detalhes por pacote e por modelo em [docs/licenses.md](docs/licenses.md).

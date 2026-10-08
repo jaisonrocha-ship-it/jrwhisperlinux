@@ -18,6 +18,32 @@
 * **Léxico de logística** (Ajustes → Texto; `dictate --build-lexicon`, ~6–16 s, sem LLM): jargão do glossário (`~/glossario-logistica`) que está fora dos dicionários comuns do sistema e aparece nos seus e-mails/ditados ou ≥20× nos livros de porto/comex do vault; sigla que você usa entra como sigla ("PSC" é Port State Control, não o "polar stratospheric cloud" do glossário). Vira a nota "Léxico de logística.md": risque para tirar (continua fora ao recriar), "Meus termos" e "Traduções" são seus. Usos: os termos que você usa vão para o vocabulário do Whisper; a IA recebe pistas de jargão mal transcrito e a lista de termos corretos para manter; o modo Inglês e as legendas usam ~90 traduções curadas (as do glossário eram palavra por palavra). Medido com o qwen2.5: "laitime… demorage" → "laytime… demurrage" (sem léxico: "latenete… demora"); "danage pra peação" → "dunnage para peação" (antes trocava peação por "instalação"); inglês "estufagem/peação/berço" → "stuffing/lashing/berth" (antes "steaming/uncoiling"). +0–50 ms; pistas em 0,3–6,5 ms. Os livros não entram no estilo: são de outros autores e em inglês.
 * **Tempos por etapa no log** (transcrição e texto/IA, em ms) para medir o impacto de cada novidade na agilidade.
 
+### Visual e fluidez
+* **Orbe de vidro luminoso:** corpo translúcido (a tela aparece atrás) com plasma e borda de luz, sem o halo escuro que virava mancha em fundo claro. Reage com força à voz: curva perceptual (fala baixa já mexe), cresce até +25% (antes +10%), as bolhas até +40%, a borda acende. E ficou mais leve: 3,7 → ~2,8 ms por quadro.
+* **Ondas de luz por frequência:** cada fita segue uma faixa do espectro (graves → agudos) em vez de todas seguirem o nível; a luz some antes de bater na borda.
+* **Barras espelhadas** (estilo Gravador de Voz): graves no centro, crescendo para cima e para baixo, cor simétrica e marcador de pico que cai com gravidade. A calibração usa as mesmas barras. Desenhadas num caminho só: 0,50 → 0,47 ms.
+* **Sinal de trabalho:** três pontinhos em onda no fim do texto parcial (com espaço reservado na linha) e uma faixa de luz atravessando o texto ao transcrever ou quando a IA reescreve na revisão.
+* **Legendas com frase em foco estável** no lugar da lente: a lente recalculava a escala de cada linha pela distância ao foco a cada quadro, então durante a rolagem o texto lido crescia e encolhia, e as bordas desciam a 0,55× (ilegível). Agora a frase mais nova fica maior numa faixa fixa, as anteriores em tamanho normal esmaecendo com a idade, e o tamanho só muda na troca de foco (~0,2 s), com a frase nova entrando em fade. Prévia mais legível (62%) e rolagem mais ágil. Sai o ajuste "Alcance".
+* **Fade do overlay no relógio de quadros:** o timer de 14 ms com passo linear andava aos degraus no painel de 165 Hz; agora entra em ~0,25 s e sai em ~0,16 s com curva suave.
+* **Ícones nítidos em qualquer posição e em HiDPI:** o microfone e a engrenagem eram imagens coladas em posição fracionária (o borrão dobrava: 144 → 290 pixels de meio-tom); agora o vetor é rasterizado no tamanho exato em pixels do dispositivo e alinhado ao pixel. Os ícones das janelas saem na escala do monitor.
+* **Um vidro só para os cartões do overlay** (caixa de texto, legendas, pílula, status), com sombra curta e borda: sobre página escura cheia de texto, o ditado se misturava com a página e o texto branco de trás aparecia sob os chips. A engrenagem ganhou um disco e não some mais em fundo claro.
+* **Janelas coesas:** o texto de busca vazio era laranja no Spotlight e no histórico (cor do tema do sistema); a janela de Ajustes abria com 1297 px porque um ditado longo na aba Histórico alargava todas as abas (agora 900 px, títulos longos terminam em "…"); números com vírgula decimal em todo lugar ("0,60", "limiar 0,0029"); a calibração mostra a data como o histórico ("Calibrado · Ontem 13:35").
+* **Nomes de microfone legíveis:** duas entradas iguais ("Áudio Interno (PCI)") ganham "· 2", e o mic escolhido mas desconectado aparece como "Yeti GX · desconectado" em vez do id do PulseAudio.
+
+### IA local
+* **Modelo local sempre pronto:** a reescrita pelo Ollama não pedia `keep_alive`, então depois de 5 min parado o modelo descarregava e recarregar (2–12 s) estourava os 3 s que a fila dá ao local: o ditado ia para a nuvem justamente quando o local seria o mais rápido. Agora o modelo fica 30 min carregado e começa a carregar quando você começa a falar, gerando 1 token para aquecer a GPU. Medido: 1,8 s de pré-carga durante a fala, 322 ms na 1ª reescrita, ~205 ms nas seguintes.
+* **Ollama próprio do ditado** (`jrwhisper-ollama`, porta 11435, GPU, sobe no boot com o Docker): o ditado usava o Ollama que veio com o Moorcheh (memória do Hermes), e um `moorcheh down` levava a IA local e o tradutor das legendas junto. Reaproveita os modelos já baixados.
+
+### Instalação
+* **O comando `dictate` sobrevive a mover ou renomear o repositório:** era um symlink, e mover a pasta quebrava atalhos, menu e o serviço. Agora é um lançador que guarda o caminho e, se ele sumir, procura em `~` e se corrige; sem repositório, avisa na tela.
+* O instalador passa a instalar `gir1.2-rsvg-2.0` e `gir1.2-atspi-2.0` (ícones e contexto do campo); numa instalação limpa, os Ajustes e o overlay quebravam.
+
+### Correções
+* **A IA cortava aspas do texto:** `Ele disse “sim”` virava `Ele disse “sim`, e um raciocínio `<think>` cortado pelo limite de tokens era colado no campo. Agora só sai o par de aspas que embrulha a resposta inteira, e raciocínio cortado faz o ditado colar o original.
+* **Histórico mostrava "31/12" no lugar de "Ontem"** no 1º de janeiro depois de um ano de 365 dias (e no dia em que termina o horário de verão).
+* `tests/test_gpu.py` baixava 1,5 GB de um modelo fixo; agora usa o modelo do config e o preload do cuBLAS.
+* Documentação refeita: README completo (atalhos, recursos, Ajustes, privacidade, arquivos, problemas comuns), `docs/configuration.md` com cada chave do config e `docs/architecture.md` descrevendo o código atual.
+
 ## v4.0 — 2026-10-07 (Estável / Atual)
 
 ### Novidades (desde a v3.2)
