@@ -164,7 +164,8 @@ def test_local_ai_stays_loaded_and_warms_up():
             gen = [b for path, b in FakeOllama.calls if path == "/api/generate"]
             assert bool(gen) == warms, (status, FakeOllama.calls)
             if warms:
-                assert gen[0] == {"model": "qwen2.5", "keep_alive": ai.OLLAMA_KEEP_ALIVE}
+                assert gen[0]["model"] == "qwen2.5" and gen[0]["keep_alive"] == ai.OLLAMA_KEEP_ALIVE
+                assert gen[0]["options"]["num_predict"] == 1  # gera 1 token: aquece a GPU, não só carrega
     finally:
         ai.check_local = real
         server.shutdown()

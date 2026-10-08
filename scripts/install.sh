@@ -140,6 +140,9 @@ systemctl --user daemon-reload
 systemctl --user enable --now dictate-daemon.service 2>/dev/null || true
 ok "Daemon configurado"
 
+info "IA local: Ollama próprio do ditado (Docker, porta 11435)..."
+sh "$PWD/scripts/ollama-container.sh" && ok "Ollama do ditado pronto"
+
 CONFIG_JSON="$HOME/.config/dictate/config.json"
 INSTALL_LOG="${XDG_RUNTIME_DIR:-/tmp}/dictate_install.log"
 info "Pre-carregando modelo Whisper em background..."

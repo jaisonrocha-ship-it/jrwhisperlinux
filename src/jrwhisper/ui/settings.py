@@ -19,7 +19,7 @@ from gi.repository import Gtk, Gdk, GLib
 from .. import history, shortcuts
 from ..audio import (SYSTEM_AUDIO, AudioCapture, calibration_state, default_source_name, friendly_mic_name,
                      is_system_audio, list_source_names, resolve_mic, rms_db)
-from ..config import DEFAULT_CONFIG, RUNTIME_DIR, _debug_log, save_config
+from ..config import DEFAULT_CONFIG, OLLAMA_URL, RUNTIME_DIR, _debug_log, save_config
 from ..paste import copy_text
 from ..transcribe import is_daemon_running
 from . import theme as t
@@ -747,7 +747,7 @@ class SettingsWindow(Gtk.Window):
                      set_chain)
         from .. import ai
         provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
-            "ai_ollama_url", "http://localhost:11434"))
+            "ai_ollama_url", OLLAMA_URL))
         provider_rows["ollama_model"] = t.row(lb, "Modelo local (Ollama)", "1º da fila: grátis e nada sai do computador.", self._entry("ai_ollama_model", "qwen2.5"))
         provider_rows["nvidia_key"] = self._key_row(lb, "nvidia", "NVIDIA", "nvapi-…")
         provider_rows["nvidia_model"] = t.choice_row(

@@ -15,6 +15,9 @@ DEBUG_LOG = os.path.join(RUNTIME_DIR, "dictate_debug.log")
 ERROR_LOG = os.path.join(RUNTIME_DIR, "dictate_error.log")
 LAST_WAV = os.path.join(RUNTIME_DIR, "dictate_last.wav")
 PARTIAL_WAV = os.path.join(RUNTIME_DIR, "dictate_partial.wav")
+# Ollama próprio do ditado (scripts/ollama-container.sh): porta 11435, independente do Ollama do
+# Moorcheh/Hermes na 11434 (que só serve embeddings e pode ser derrubado sem levar o ditado junto).
+OLLAMA_URL = "http://localhost:11435"
 
 
 DEFAULT_CONFIG = {
@@ -83,7 +86,7 @@ DEFAULT_CONFIG = {
     "ai_chain": ["ollama", "nvidia", "deepseek"],
     "ai_model": "nvidia/nemotron-3-super-120b-a12b",
     "ai_deepseek_model": "deepseek-flash",
-    "ai_ollama_url": "http://localhost:11434",
+    "ai_ollama_url": OLLAMA_URL,
     "ai_ollama_model": "qwen2.5",
     "ai_default_mode": "",
     "ai_voice_prefix": True,

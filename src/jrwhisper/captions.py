@@ -22,7 +22,7 @@ import requests
 
 from . import ai, history, lexicon, secrets, vault
 from .audio import SYSTEM_AUDIO, AudioCapture
-from .config import RUNTIME_DIR, TICK_INTERVAL, _debug_log
+from .config import OLLAMA_URL, RUNTIME_DIR, TICK_INTERVAL, _debug_log
 from .paste import copy_text
 from .transcribe import Transcriber
 
@@ -121,7 +121,7 @@ class Chunker:
 
 def _ollama_models(config):
     try:
-        url = config.get("ai_ollama_url", "http://localhost:11434")
+        url = config.get("ai_ollama_url", OLLAMA_URL)
         return [m["name"] for m in requests.get(url + "/api/tags", timeout=1).json()["models"]]
     except (requests.RequestException, ValueError, KeyError):
         return []

@@ -13,7 +13,7 @@ import unicodedata
 import requests
 
 from . import secrets
-from .config import _debug_log
+from .config import OLLAMA_URL, _debug_log
 
 NIM_URL = "https://integrate.api.nvidia.com/v1"
 DEEPSEEK_URL = "https://api.deepseek.com"
@@ -125,7 +125,7 @@ def complete(config, instruction, text, timeout=None, system=SYSTEM, options=Non
     try:
         provider = config.get("ai_provider", "nvidia")
         if provider == "ollama":
-            r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
+            r = _http.post(config.get("ai_ollama_url", OLLAMA_URL) + "/api/chat",
                               json={"model": config.get("ai_ollama_model", "qwen2.5"), "messages": messages,
                                     "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                                     "options": {"temperature": 0.2, **(options or {})},
@@ -163,7 +163,7 @@ def translate_hymt(config, text, target, source_lang, timeout=6):
     prompt = (f"将以下文本翻译为{zh}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}" if source_lang == "zh"
               else f"Translate the following segment into {en}, without additional explanation.\n\n{text}")
     try:
-        r = _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/chat",
+        r = _http.post(config.get("ai_ollama_url", OLLAMA_URL) + "/api/chat",
                        json={"model": config["ai_ollama_model"], "stream": False, "keep_alive": OLLAMA_KEEP_ALIVE,
                              "messages": [{"role": "user", "content": prompt}], "options": {"temperature": 0.2}},
                        timeout=timeout)
@@ -205,7 +205,7 @@ _gpu = {"t": 0.0, "ok": None, "why": ""}  # checagem da IA local, feita em paral
 
 
 def _ollama_get(config, path):
-    r = _http.get(config.get("ai_ollama_url", "http://localhost:11434") + path, timeout=1)
+    r = _http.get(config.get("ai_ollama_url", OLLAMA_URL) + path, timeout=1)
     r.raise_for_status()
     return r.json()
 
@@ -252,12 +252,14 @@ def prefetch_local(config):
 
 
 def warm_local(config):
-    """Carrega o modelo sem gerar nada (/api/generate sem prompt) e o mantém por OLLAMA_KEEP_ALIVE."""
+    """Carrega o modelo e gera 1 token (aquece os kernels da GPU: sem isso a 1ª reescrita ainda leva
+    ~1,7 s); fica carregado por OLLAMA_KEEP_ALIVE."""
     t0 = time.perf_counter()
     try:
-        _http.post(config.get("ai_ollama_url", "http://localhost:11434") + "/api/generate",
-                   json={"model": config.get("ai_ollama_model", "qwen2.5"), "keep_alive": OLLAMA_KEEP_ALIVE},
-                   timeout=30).raise_for_status()
+        _http.post(config.get("ai_ollama_url", OLLAMA_URL) + "/api/generate",
+                   json={"model": config.get("ai_ollama_model", "qwen2.5"), "prompt": "ok", "stream": False,
+                         "options": {"num_predict": 1}, "keep_alive": OLLAMA_KEEP_ALIVE},
+                   timeout=40).raise_for_status()
         _gpu["why"] = LOADED
         _debug_log(f"IA local pré-carregada em {time.perf_counter() - t0:.1f} s")
     except requests.RequestException as e:
