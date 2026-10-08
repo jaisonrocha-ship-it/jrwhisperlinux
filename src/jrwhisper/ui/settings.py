@@ -18,7 +18,7 @@ from gi.repository import Gtk, Gdk, GLib
 
 from .. import history, shortcuts
 from ..audio import (SYSTEM_AUDIO, AudioCapture, calibration_state, default_source_name, friendly_mic_name,
-                     is_system_audio, list_source_names, resolve_mic, rms_db)
+                     is_system_audio, list_source_names, mic_options, resolve_mic, rms_db)
 from ..config import DEFAULT_CONFIG, RUNTIME_DIR, _debug_log, save_config
 from ..paste import copy_text
 from ..transcribe import is_daemon_running
@@ -524,7 +524,8 @@ class SettingsWindow(Gtk.Window):
                      "Se o microfone escolhido estiver desconectado, o ditado usa o padrão do sistema e avisa. "
                      "Som do computador transcreve o que está tocando (vídeo, reunião) direto da saída de áudio: "
                      "não para nas pausas, termina no 2º toque do atalho ou na duração máxima.")
-        options = [("@DEFAULT_SOURCE@", "Padrão do sistema")] + [(n, friendly_mic_name(n)) for n in list_source_names()]
+        options = [("@DEFAULT_SOURCE@", "Padrão do sistema")] + mic_options(list_source_names(),
+                                                                            self.config.get("mic_device"))
         options.append((SYSTEM_AUDIO, "Som do computador"))
         self.mic_combo = t.choice_row(lb, "Entrada", None, options,
                                       self.config.get("mic_device", "@DEFAULT_SOURCE@"), self._on_mic_changed)

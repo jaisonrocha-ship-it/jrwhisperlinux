@@ -48,9 +48,18 @@ def test_resolve_mic_fallback():
     assert d.resolve_mic({"mic_device": YETI}) == (YETI, False)
 
 
+def test_mic_options_readable():
+    pci0, pci2 = "alsa_input.pci-0000_00_1f.3.capture.0.0", "alsa_input.pci-0000_00_1f.3.capture.2.0"
+    yeti = "alsa_input.usb-Logitech_Yeti_GX_2404SG0012M8-00.capture.0.0"
+    labels = [l for _n, l in d.mic_options([pci0, pci2, yeti], yeti)]
+    assert labels == ["Áudio Interno (PCI)", "Áudio Interno (PCI) · 2", "Yeti GX"]  # sem nomes repetidos
+    assert d.mic_options([pci0], yeti)[-1] == (yeti, "Yeti GX · desconectado")   # nunca o id técnico
+    assert d.mic_options([pci0], "@DEFAULT_SOURCE@") == [(pci0, "Áudio Interno (PCI)")]
+
+
 def run_tests():
     failed = False
-    for fn in (test_evaluate_levels, test_calibration_follows_hw_gain, test_resolve_mic_fallback):
+    for fn in (test_evaluate_levels, test_calibration_follows_hw_gain, test_resolve_mic_fallback, test_mic_options_readable):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")

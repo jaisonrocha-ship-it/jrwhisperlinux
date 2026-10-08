@@ -4,7 +4,7 @@ import math
 import numpy as np
 from gi.repository import Gtk, GLib
 
-from ..audio import AudioCapture, calibration_state, default_source_name, evaluate_levels, friendly_mic_name, is_yeti, list_source_names, remove_mic_calibration, resolve_mic, rms_db, save_mic_calibration, yeti_hw_status
+from ..audio import AudioCapture, calibration_state, default_source_name, evaluate_levels, friendly_mic_name, is_yeti, list_source_names, mic_options, remove_mic_calibration, resolve_mic, rms_db, save_mic_calibration, yeti_hw_status
 from ..config import CALIBRATION_VERDICTS, TICK_INTERVAL
 from . import theme as t
 from .visuals import BarsVisual, rounded_rect, spectrum_bands
@@ -65,13 +65,10 @@ class CalibrationWindow(Gtk.Window):
         root.pack_start(head, False, False, 0)
 
         self.combo = t.PopupChoice()
-        names = list_source_names()
         default = default_source_name()
         initial = mic or resolve_mic(config)[0]
-        if initial not in names:
-            names.append(initial)
-        for n in names:
-            self.combo.append(n, friendly_mic_name(n) + ("  ·  padrão do sistema" if n == default else ""))
+        for n, label in mic_options(list_source_names(), initial):
+            self.combo.append(n, label + ("  ·  padrão do sistema" if n == default else ""))
         lb = t.group(root)
         mic_row = t.row(lb, "Microfone", " ", self.combo)
         self.lbl_mic_state = mic_row.subtitle

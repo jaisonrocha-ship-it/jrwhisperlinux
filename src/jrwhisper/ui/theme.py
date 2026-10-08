@@ -11,7 +11,7 @@ import functools
 import cairo
 import gi
 gi.require_version("Rsvg", "2.0")
-from gi.repository import GObject, Gtk, Gdk, GdkPixbuf, Rsvg
+from gi.repository import GObject, Gtk, Gdk, GdkPixbuf, Pango, Rsvg
 
 from ..config import load_config
 
@@ -68,6 +68,8 @@ CSS_TEMPLATE = """
 @define-color text #F5F5F7;
 @define-color text2 #98989D;
 @define-color hairline rgba(255, 255, 255, 0.07);
+/* o tema do sistema (MacTahoe) pinta placeholder de laranja; aqui segue o cinza secundário */
+@define-color placeholder_text_color #7C7C82;
 
 window {{
     background-color: @bg;
@@ -393,7 +395,10 @@ def row(lb, title, subtitle=None, control=None):
     h = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
     texts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
     texts.set_valign(Gtk.Align.CENTER)
-    texts.pack_start(label(title, "row-title"), False, False, 0)
+    r.title = label(title, "row-title")
+    # título longo (ex.: um ditado no histórico) termina em "…" em vez de alargar a janela toda
+    r.title.set_ellipsize(Pango.EllipsizeMode.END)
+    texts.pack_start(r.title, False, False, 0)
     if subtitle:
         r.subtitle = label(subtitle, "row-subtitle", wrap=True)
         texts.pack_start(r.subtitle, False, False, 0)

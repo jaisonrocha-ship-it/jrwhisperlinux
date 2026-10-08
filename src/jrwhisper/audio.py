@@ -284,6 +284,19 @@ def friendly_mic_name(name):
     return name
 
 
+def mic_options(names, current):
+    """(id, nome amigável) sem nomes repetidos (duas entradas PCI viram "… · 2"); o mic escolhido e
+    desconectado aparece pelo nome, marcado, em vez do id técnico do PulseAudio."""
+    out, seen = [], {}
+    for n in names:
+        label = friendly_mic_name(n)
+        seen[label] = seen.get(label, 0) + 1
+        out.append((n, label if seen[label] == 1 else f"{label} · {seen[label]}"))
+    if current and current != "@DEFAULT_SOURCE@" and current not in names:
+        out.append((current, f"{friendly_mic_name(current)} · desconectado"))
+    return out
+
+
 def list_source_names():
     """Entradas reais (sem .monitor) do PulseAudio/PipeWire; [] se o pactl falhar."""
     try:
