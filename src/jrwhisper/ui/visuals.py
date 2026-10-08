@@ -132,9 +132,9 @@ class OrbVisual(Visual):
                  "calibrating": 0.5, "error": 0.2}.get(self.state, 0.4)
         self.angle += speed * dt
 
-    def _membrane(self, cr, cx, cy, r):
+    def _membrane(self, cr, cx, cy, r, lv):
         """Contorno ondulado: soma de senos no ângulo, amplitude segue a voz."""
-        p, amp = self.angle, 0.018 + 0.07 * self.level
+        p, amp = self.angle, 0.018 + 0.11 * lv
         n = 72
         for i in range(n + 1):
             th = 2 * math.pi * i / n
@@ -146,42 +146,37 @@ class OrbVisual(Visual):
         cr.close_path()
 
     def draw(self, cr, cx, cy):
+        """Vidro luminoso: corpo translúcido (a tela aparece atrás), plasma por dentro e borda de luz.
+        A voz (curva perceptual: fala baixa já mexe) cresce a esfera até +25%, acende o núcleo e a borda."""
         s = self.scale
+        lv = self.level ** 0.7
         breathe = 0 if self.reduce_motion else 0.018 * math.sin(self.t * 2.2)
         pulse = 0.0
         if self.state == "transcribing" and not self.reduce_motion:
             pulse = 0.5 + 0.5 * math.sin(self.t * 5.0)
-        r = self.RING / 2 * s * (1 + 0.10 * self.level + breathe)
+        r = self.RING / 2 * s * (1 + 0.25 * lv + breathe)
         c0, c1 = self.colors
         mid = _lerp(c0, c1, 0.5)
-        intensity = self.glow * (0.75 + 0.6 * self.level + 0.35 * pulse)
-
-        # fundo escuro: contraste sobre qualquer desktop (o brilho aditivo precisa dele)
-        halo = cairo.RadialGradient(cx, cy, r * 0.4, cx, cy, r * 1.7)
-        halo.add_color_stop_rgba(0, 0.07, 0.05, 0.20, 0.92)
-        halo.add_color_stop_rgba(0.55, 0.06, 0.04, 0.17, 0.72)
-        halo.add_color_stop_rgba(1, 0.05, 0.04, 0.15, 0.0)
-        cr.set_source(halo)
-        cr.arc(cx, cy, r * 1.7, 0, 2 * math.pi)
-        cr.fill()
+        intensity = self.glow * (0.7 + 0.9 * lv + 0.35 * pulse)
+        reach = min(r * 1.6, self.size()[0] / 2)  # o brilho não passa da área do visual
 
         cr.save()
-        cr.set_operator(cairo.OPERATOR_ADD)  # luz soma luz
-        glow = cairo.RadialGradient(cx, cy, r * 0.8, cx, cy, r * 1.65)
-        glow.add_color_stop_rgba(0, *mid, 0.40 * intensity)
-        glow.add_color_stop_rgba(0.35, *mid, 0.14 * intensity)
+        cr.set_operator(cairo.OPERATOR_ADD)  # luz soma luz; sem halo escuro (era mancha em fundo claro)
+        glow = cairo.RadialGradient(cx, cy, r * 0.85, cx, cy, reach)
+        glow.add_color_stop_rgba(0, *mid, 0.42 * intensity)
+        glow.add_color_stop_rgba(0.4, *mid, 0.12 * intensity)
         glow.add_color_stop_rgba(1, *mid, 0.0)
         cr.set_source(glow)
-        cr.arc(cx, cy, r * 1.65, 0, 2 * math.pi)
+        cr.arc(cx, cy, reach, 0, 2 * math.pi)
         cr.fill()
         cr.restore()
 
-        # miolo sólido dentro da membrana: o desktop não aparece através da esfera
-        self._membrane(cr, cx, cy, r)
-        core = cairo.RadialGradient(cx, cy - r * 0.3, r * 0.1, cx, cy, r)
-        core.add_color_stop_rgba(0, 0.11, 0.08, 0.27, 0.97)
-        core.add_color_stop_rgba(1, 0.05, 0.03, 0.14, 0.97)
-        cr.set_source(core)
+        # corpo de vidro fumê: translúcido, mas escuro o bastante para o mic branco ler sobre qualquer fundo
+        self._membrane(cr, cx, cy, r, lv)
+        body = cairo.RadialGradient(cx, cy - r * 0.3, r * 0.1, cx, cy, r)
+        body.add_color_stop_rgba(0, 0.10, 0.07, 0.24, 0.50)
+        body.add_color_stop_rgba(1, 0.05, 0.03, 0.14, 0.62)
+        cr.set_source(body)
         cr.fill_preserve()
 
         cr.save()
@@ -191,45 +186,49 @@ class OrbVisual(Visual):
         for orbit, rad, vx, vy, ph, mix in self.BLOBS:
             bx = cx + r * orbit * math.cos(p * vx + ph)
             by = cy + r * orbit * math.sin(p * vy + ph)
-            br = r * rad * (1 + 0.25 * self.level)
+            br = r * rad * (1 + 0.4 * lv)
             c = _lerp(c0, c1, mix)
             g = cairo.RadialGradient(bx, by, 0, bx, by, br)
             g.add_color_stop_rgba(0, *c, 0.55 * intensity)
             g.add_color_stop_rgba(0.45, *c, 0.22 * intensity)
             g.add_color_stop_rgba(1, *c, 0.0)
             cr.set_source(g)
-            cr.paint()
-        # borda acesa (fresnel): a esfera brilha mais na beirada
-        rim = cairo.RadialGradient(cx, cy, r * 0.55, cx, cy, r * 1.08)
+            cr.arc(bx, by, br, 0, 2 * math.pi)  # só o disco da bolha, não a área toda
+            cr.fill()
+        # borda de luz (fresnel): mais forte e larga com a voz
+        rim = cairo.RadialGradient(cx, cy, r * (0.6 - 0.1 * lv), cx, cy, r * 1.08)
         rim.add_color_stop_rgba(0, *c1, 0.0)
-        rim.add_color_stop_rgba(0.7, *c1, 0.10 * intensity)
-        rim.add_color_stop_rgba(1, *_lerp(c1, (1, 1, 1), 0.35), 0.75 * intensity)
+        rim.add_color_stop_rgba(0.7, *c1, (0.10 + 0.12 * lv) * intensity)
+        rim.add_color_stop_rgba(1, *_lerp(c1, (1, 1, 1), 0.35 + 0.3 * lv), 0.8 * intensity)
         cr.set_source(rim)
-        cr.paint()
+        cr.arc(cx, cy, r * 1.08, 0, 2 * math.pi)
+        cr.fill()
         cr.restore()
 
         # reflexo de vidro no alto
         hx, hy = cx - r * 0.32, cy - r * 0.48
         spec = cairo.RadialGradient(hx, hy, 0, hx, hy, r * 0.42)
-        spec.add_color_stop_rgba(0, 1, 1, 1, 0.20)
+        spec.add_color_stop_rgba(0, 1, 1, 1, 0.22)
         spec.add_color_stop_rgba(1, 1, 1, 1, 0.0)
         cr.set_source(spec)
         cr.arc(hx, hy, r * 0.42, 0, 2 * math.pi)
         cr.fill()
 
-        # ícone central: check no sucesso, mic no resto
+        # ícone central: check no sucesso, mic no resto (sombra leve: lê sobre o plasma claro)
         if self.state == "success":
-            cr.set_source_rgba(1, 1, 1, 0.95)
-            cr.set_line_width(3.2 * s)
             cr.set_line_cap(cairo.LINE_CAP_ROUND)
             cr.set_line_join(cairo.LINE_JOIN_ROUND)
             k = 13 * s
-            cr.move_to(cx - k, cy + 0.5)
-            cr.line_to(cx - k * 0.3, cy + k * 0.65)
-            cr.line_to(cx + k, cy - k * 0.6)
-            cr.stroke()
+            for dy, rgba, width in ((1.2 * s, (0, 0, 0, 0.3), 4.4), (0, (1, 1, 1, 0.95), 3.2)):
+                cr.move_to(cx - k, cy + 0.5 + dy)
+                cr.line_to(cx - k * 0.3, cy + k * 0.65 + dy)
+                cr.line_to(cx + k, cy - k * 0.6 + dy)
+                cr.set_source_rgba(*rgba)
+                cr.set_line_width(width * s)
+                cr.stroke()
         else:
             alpha = 0.55 if self.state in ("transcribing", "calibrating") else 0.95
+            draw_icon(cr, "mic", cx, cy + 1.2 * s, 34 * s, (0, 0, 0, 0.3 * alpha), 2.6)
             draw_icon(cr, "mic", cx, cy, 34 * s, (1, 1, 1, alpha), 1.8)
 
 

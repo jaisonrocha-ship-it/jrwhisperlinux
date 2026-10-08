@@ -55,9 +55,30 @@ def test_icons_are_crisp():
     assert hi.shape == (160, 160) and (hi > 0).sum() > 3 * (a > 0).sum()  # HiDPI: detalhe real, não esticado
 
 
+def _orb_over_red(level):
+    """Orbe sem brilho (glow 0: só o corpo) sobre fundo vermelho opaco."""
+    v = make_visual({"overlay_style": "orb", "overlay_glow": 0.0, "reduce_motion": True})
+    v.set_level(level)
+    for _ in range(120):
+        v.advance(1 / 60)
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 300, 300)
+    cr = cairo.Context(surf)
+    cr.set_source_rgb(1, 0, 0); cr.paint()
+    v.draw(cr, 150, 150)
+    surf.flush()
+    return np.frombuffer(bytes(surf.get_data()), np.uint8).reshape(300, 300, 4)  # BGRA
+
+
+def test_orb_is_glass_and_reacts():
+    quiet, loud = _orb_over_red(0.0), _orb_over_red(1.0)
+    assert quiet[150 + 30, 150 - 30, 2] > 90        # o fundo aparece através do corpo (antes: opaco, ~8)
+    body = lambda img: int((img[..., 2] < 200).sum())  # pixels escurecidos pelo corpo de vidro
+    assert body(loud) > 1.4 * body(quiet), (body(loud), body(quiet))  # voz forte: esfera bem maior
+
+
 def run_tests():
     failed = False
-    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp):
+    for fn in (test_spectrum_bands, test_visuals_draw_every_state, test_icons_are_crisp, test_orb_is_glass_and_reacts):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
