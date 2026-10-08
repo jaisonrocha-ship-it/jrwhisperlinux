@@ -14,7 +14,7 @@ from jrwhisper.profiles import effective_config, match_profile
 from jrwhisper.textproc import apply_case_rules, apply_snippets
 
 secrets.get_key = lambda provider: "nvapi-teste"
-CFG = {**DEFAULT_CONFIG, "profiles_enabled": True, "ai_enabled": True}
+CFG = {**DEFAULT_CONFIG, "profiles_enabled": True, "ai_enabled": True, "ai_chain": ["nvidia"]}  # só o servidor falso
 
 
 class FakeNIM(BaseHTTPRequestHandler):

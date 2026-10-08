@@ -17,6 +17,7 @@ class Result:
     profile: dict = None
     ai_error: str = None
     config: dict = field(default_factory=dict)
+    provider: str = None  # IA que respondeu (ollama | nvidia | deepseek)
 
 
 def choose_mode(config, text, forced_mode=None, profile=None):
@@ -35,7 +36,8 @@ def choose_mode(config, text, forced_mode=None, profile=None):
     return None, text
 
 
-def process(config, raw, wm_class=None, forced_mode=None, on_status=None):
+def process(config, raw, wm_class=None, forced_mode=None, on_status=None, context=None):
+    """context: bloco de texto do campo em foco (context.Context.prompt()), só para a IA."""
     profile = match_profile(config, wm_class)
     cfg = effective_config(config, profile)
     if profile:
@@ -43,15 +45,16 @@ def process(config, raw, wm_class=None, forced_mode=None, on_status=None):
     mode, text = choose_mode(cfg, raw, forced_mode, profile)
     if cfg.get("enable_formatting", True):
         text = format_transcript(text, cfg)
-    error = None
+    error = provider = None
     if mode and text.strip():
         if on_status:
             on_status(f"Reescrevendo · {mode['name']}…")
         try:
-            text = ai.rewrite(cfg, text, mode)
+            text = ai.rewrite(cfg, text, mode, context=context or None)
+            provider = ai.last_provider
         except ai.AIError as e:
             error = str(e)
             _debug_log(f"IA falhou ({mode['id']}): {e}; colando o original")
     text = apply_snippets(text, cfg.get("snippets"))
     text = apply_case_rules(text, cfg)
-    return Result(text=text, mode=mode, profile=profile, ai_error=error, config=cfg)
+    return Result(text=text, mode=mode, profile=profile, ai_error=error, config=cfg, provider=provider)

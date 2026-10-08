@@ -28,6 +28,10 @@ from .captionview import CaptionView
 from .visuals import VISUAL_LABELS, make_visual, rounded_rect, spectrum_bands
 
 DICTATE_CMD = os.path.expanduser("~/.local/bin/dictate")
+AI_CHAINS = [("ollama,nvidia,deepseek", "Local → NVIDIA → DeepSeek"),
+             ("ollama,deepseek,nvidia", "Local → DeepSeek → NVIDIA"),
+             ("nvidia,deepseek", "Só nuvem: NVIDIA → DeepSeek"),
+             ("ollama", "Só local (Ollama)")]
 SEND_KEYS = {"Return": "Enter", "ctrl+Return": "Ctrl+Enter", "shift+Return": "Shift+Enter"}
 
 PAGES = [
@@ -693,12 +697,16 @@ class SettingsWindow(Gtk.Window):
         content = self._feature_gate(box, "ai_enabled", "Reescrita com IA",
                                      "Corrigir, transformar em e-mail, traduzir, resumir em tópicos.")
 
-        lb = t.group(content, "Provedor")
+        lb = t.group(content, "Provedores", "Tenta em ordem: se uma falhar, demorar mais de 3 s ou a placa de vídeo "
+                                            "estiver sem espaço ou quente, passa para a próxima. Só cola o original "
+                                            "se todas falharem.")
         provider_rows = {}
-        t.row(lb, "Serviço", None, t.segmented([("nvidia", "NVIDIA NIM"), ("deepseek", "DeepSeek"),
-                                                ("ollama", "Ollama (local)")],
-                                               self.config.get("ai_provider", "nvidia"),
-                                               lambda v: (self.set("ai_provider", v), self._ai_provider_rows(provider_rows))))
+
+        def set_chain(v):
+            self.set("ai_chain", v.split(","))
+            self._ai_provider_rows(provider_rows)
+        t.choice_row(lb, "Ordem", None, AI_CHAINS, ",".join(self.config.get("ai_chain") or [self.config["ai_provider"]]),
+                     set_chain)
         from .. import ai
         provider_rows["nvidia_key"] = self._key_row(lb, "nvidia", "NVIDIA", "nvapi-…")
         provider_rows["nvidia_model"] = t.choice_row(
@@ -711,7 +719,7 @@ class SettingsWindow(Gtk.Window):
             lambda v: self.set("ai_deepseek_model", v)).get_ancestor(Gtk.ListBoxRow)
         provider_rows["ollama_url"] = t.row(lb, "Endereço do Ollama", None, self._entry(
             "ai_ollama_url", "http://localhost:11434"))
-        provider_rows["ollama_model"] = t.row(lb, "Modelo do Ollama", None, self._entry("ai_ollama_model", "llama3.2"))
+        provider_rows["ollama_model"] = t.row(lb, "Modelo do Ollama", None, self._entry("ai_ollama_model", "qwen2.5"))
         test_label = t.label("", "row-subtitle")
         tb = Gtk.Box(spacing=10)
         tb.pack_start(test_label, False, False, 0)
@@ -731,9 +739,15 @@ class SettingsWindow(Gtk.Window):
                      opts, self.config.get("ai_default_mode", ""), lambda v: self.set("ai_default_mode", v))
         t.switch_row(lb2, "Ativar por voz", "Diga “modo <nome>” no começo: “modo e-mail, preciso remarcar…”.",
                      self.config.get("ai_voice_prefix", True), lambda v: self.set("ai_voice_prefix", v))
-        content.pack_start(t.label("Privacidade: com a NVIDIA NIM o texto ditado vai para a nuvem da NVIDIA. "
-                                   "Com o Ollama tudo fica no seu computador. Se a IA falhar ou demorar, "
-                                   "o texto original é colado.", "group-footer", wrap=True), False, False, 0)
+        lb3 = t.group(content, "Contexto")
+        t.switch_row(lb3, "Usar o campo em foco", "App, janela, rótulo do campo e o texto selecionado (a maior pista "
+                     "do assunto) ajudam a IA com nomes e termos; nomes próprios também vão para o reconhecimento. "
+                     "Nunca troca o modo sozinho.",
+                     self.config.get("context_enabled", True), lambda v: self.set("context_enabled", v))
+        content.pack_start(t.label("Privacidade: com o Ollama tudo fica no seu computador. Quando a fila chega à "
+                                   "NVIDIA ou ao DeepSeek, o ditado e o contexto vão para a nuvem deles; a revisão "
+                                   "mostra “via NVIDIA/DeepSeek” quando isso acontece.",
+                                   "group-footer", wrap=True), False, False, 0)
         return root
 
     def _entry(self, key, placeholder):
@@ -743,9 +757,9 @@ class SettingsWindow(Gtk.Window):
         return e
 
     def _ai_provider_rows(self, rows):
-        provider = self.config.get("ai_provider", "nvidia")
+        chain = self.config.get("ai_chain") or [self.config.get("ai_provider", "nvidia")]
         for name, r in rows.items():
-            r.set_visible(name.split("_")[0] == provider)
+            r.set_visible(name.split("_")[0] in chain)
         return False
 
     def _key_row(self, lb, provider, name, placeholder):
@@ -778,8 +792,8 @@ class SettingsWindow(Gtk.Window):
         def work():
             try:
                 from .. import ai
-                ms, sample = ai.test(self.config)
-                msg, color = f"OK · {ms:.0f} ms", t.SUCCESS
+                ms, _sample, who = ai.test(self.config)
+                msg, color = f"OK · {ms:.0f} ms · {who}", t.SUCCESS
             except Exception as e:
                 msg, color = f"Falhou: {str(e)[:60]}", t.DANGER
             GLib.idle_add(lambda: label.set_markup(

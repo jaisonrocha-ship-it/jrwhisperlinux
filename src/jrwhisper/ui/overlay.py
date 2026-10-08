@@ -52,7 +52,7 @@ ACTIONS = (("Colar  <span alpha='55%'>↵</span>", "paste"), ("Colar e enviar  <
 class WhisperFlowOverlay(Gtk.Window):
     MAX_LINES = 3
     CHOICE_LINES = 6   # revisão com IA: mais texto à vista
-    CHIP_ROWS = 4      # espaço reservado: 2 linhas de modos + 1 de "lembrar" + 1 de ações
+    CHIP_ROWS = 5      # espaço reservado: 2 linhas de modos + "contexto" + "lembrar" + ações
     MODE_ROWS = 2
 
     def __init__(self, config=None):
@@ -137,6 +137,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self.edited = False      # o usuário corrigiu palavras desde o último show_choices
         self._editor = None      # (janela, entry, início, fim) da palavra em edição
         self.corrections = []    # [{"old", "new", "remember"}]: palavras corrigidas que viram regra ao colar
+        self.context = None      # (resumo, ligado) do campo em foco; o chip liga/desliga para este ditado
         self._hover = None
         self._scroll = 0         # 1ª linha visível na revisão (texto longo, ex.: e-mail)
         self._more = (False, False)  # há linhas (acima, abaixo) fora da vista
@@ -192,7 +193,9 @@ class WhisperFlowOverlay(Gtk.Window):
         self._finish_edit(True)  # clicar em outra coisa confirma a palavra em edição
         if hit and self.choices and not self.choices_busy:
             x, y, w, h, action = hit
-            if isinstance(action, tuple) and action[0] == "learn":
+            if action == ("context",):
+                self.pick("context")
+            elif isinstance(action, tuple) and action[0] == "learn":
                 c = self.corrections[action[1]]
                 c["remember"] = not c["remember"]
                 self.queue_draw()
@@ -225,6 +228,8 @@ class WhisperFlowOverlay(Gtk.Window):
             self.pick("discard")
         elif ctrl and ch.lower() == "c":
             self.pick("copy")
+        elif not ctrl and ch == "0":
+            self.pick("raw")
         elif not ctrl and ch in "123456789":
             options = ["original"] + [m["id"] for m in self.choices[0]]
             if int(ch) <= len(options):
@@ -421,6 +426,11 @@ class WhisperFlowOverlay(Gtk.Window):
         self._scroll = 0
         self._grab_keys()
 
+    def set_context(self, label, on):
+        label = label if len(label) <= 52 else label[:51] + "…"  # chip cabe numa linha
+        self.context = (label, on) if label else None
+        self.queue_draw()
+
     def hide_choices(self):
         self._finish_edit(False)
         self.choices = None
@@ -477,11 +487,12 @@ class WhisperFlowOverlay(Gtk.Window):
             return label, action, kind, w + 2 * px
 
         rows, row, row_w = [], [], 0
-        # número = tecla do modo (1–9)
+        # número = tecla do modo (0 = Bruto, 1–9)
         items = [chip("Reescrever:", None, "label")] + [
             chip(f"<span alpha='50%'>{i}</span>  {GLib.markup_escape_text(label)}" if i <= 9
                  else GLib.markup_escape_text(label), action, "selected" if action == selected else "mode")
-            for i, (label, action) in enumerate([("Original", "original")] + [(m["name"], m["id"]) for m in modes], 1)]
+            for i, (label, action) in enumerate([("Bruto", "raw"), ("Original", "original")]
+                                                + [(m["name"], m["id"]) for m in modes])]
         for it in items:
             if row and row_w + self.chip_gap + it[3] > max_w:
                 rows.append(row)
@@ -491,6 +502,11 @@ class WhisperFlowOverlay(Gtk.Window):
         rows.append(row)
         # ponytail: além de MODE_ROWS linhas os modos somem; com muitos modos, aumentar MODE_ROWS e CHIP_ROWS
         rows = rows[: self.MODE_ROWS]
+        if self.context:  # o que a IA está usando do campo em foco; clique desliga e refaz
+            label, on = self.context
+            rows.append([chip("Contexto:", None, "label"),
+                         chip(f"{'✓' if on else '○'}  {GLib.markup_escape_text(label)}", ("context",),
+                              "learn" if on else "learn_off")])
         learn = self._visible_corrections()
         if learn:  # ✓ = vira regra ao colar; clique alterna
             row = [chip("Lembrar:", None, "label")]
@@ -606,9 +622,12 @@ class WhisperFlowOverlay(Gtk.Window):
                         rounded_rect(cr, wx0 - pad, ty + 1, wx1 - wx0 + 2 * pad, self.line_h - 2, 6 * self.scale)
                         cr.set_source_rgba(1, 1, 1, 0.12 * a)
                         cr.fill()
-                    if learning._word(m.group()) in remembered:  # sublinhado = vai ser lembrada
+                    if learning._word(m.group()) in remembered:  # sublinhado = vai ser lembrada (sem a pontuação)
+                        core = len(m.group().rstrip(".,;:!?\"'”)"))
+                        pe = lay.index_to_pos(len(line[:m.start() + core - 1].encode()))
+                        ux1 = lx + (pe.x + pe.width) / Pango.SCALE
                         uy = ty + (self.line_h + h) / 2 + 1 * self.scale
-                        rounded_rect(cr, wx0, uy, wx1 - wx0, 2 * self.scale, self.scale)
+                        rounded_rect(cr, wx0, uy, ux1 - wx0, 2 * self.scale, self.scale)
                         cr.set_source_rgba(*self.visual.accent[0], 0.9 * a)
                         cr.fill()
             cr.move_to(lx, ty + (self.line_h - h) / 2)

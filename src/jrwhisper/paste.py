@@ -42,10 +42,12 @@ def press_key(key):
         _debug_log(f"Falha ao apertar {key}: {e}")
 
 
-def paste_text(text, active_win, method="ctrl+v"):
+def paste_text(text, active_win, method="ctrl+v", after_selection=False):
     """Cola na janela ativa. method: ctrl+v | ctrl+shift+v (terminais) | type (digita).
 
     Clipboard + atalho é instantâneo; se xclip/xdotool faltarem, digita o texto.
+    after_selection: havia texto selecionado no próprio campo (só contexto): → leva o cursor ao fim da
+    seleção antes de colar, senão o Ctrl+V trocaria o texto selecionado.
     """
     _debug_log(f"Colando ({method}) no {get_display_server()}...")
     if get_display_server() == "wayland":
@@ -53,6 +55,8 @@ def paste_text(text, active_win, method="ctrl+v"):
             if method == "type":
                 raise FileNotFoundError
             subprocess.run(["wl-copy"], input=text.encode("utf-8"), timeout=3)
+            if after_selection:
+                subprocess.run(["wtype", "-k", "Right"], timeout=3)
             mods = ["-M", "ctrl"] + (["-M", "shift"] if method == "ctrl+shift+v" else [])
             subprocess.run(["wtype", *mods, "-k", "v"], timeout=3)
         except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -66,6 +70,8 @@ def paste_text(text, active_win, method="ctrl+v"):
         if active_win:
             subprocess.run(["xdotool", "windowfocus", "--sync", active_win], timeout=2)
             time.sleep(0.1)
+        if after_selection:
+            subprocess.run(["xdotool", "key", "--clearmodifiers", "Right"], timeout=2)
         if method == "type":
             _type_x11(text, active_win)
             return

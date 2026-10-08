@@ -17,7 +17,7 @@ from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text, press_key
 from .profiles import window_class
-from . import ai, history, learning, pipeline, ptt
+from . import ai, context, history, learning, pipeline, ptt
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -59,6 +59,9 @@ class DictateThread(threading.Thread):
         self.system = False       # gravando o som do computador, não o microfone
         self.finish_now = False   # 2º toque ouvindo: encerra o trecho e transcreve
         self.stop_after = False   # ...e não volta a ouvir (mãos livres)
+        self._ctx_pending = None  # captura do campo em foco, em paralelo à fala
+        self._ctx = None
+        self.use_context = True   # o chip "Contexto" da revisão desliga para este ditado
 
     def hotkey(self):
         """2º toque no atalho (SIGUSR1, roda na thread GTK): nunca descarta o que já foi dito."""
@@ -133,6 +136,10 @@ class DictateThread(threading.Thread):
             keys = ptt.watcher_for(self.config)
             handsfree = bool(self.config.get("handsfree_enabled"))
 
+            if self.config.get("context_enabled", True) and not self.system:
+                self._ctx_pending = context.capture_async(self.active_win, self.wm_class)
+            if self.config.get("ai_enabled"):
+                ai.prefetch_local(self.config)  # VRAM/temperatura da GPU já checadas quando a IA rodar
             if self.config.get("pause_media", True) and not self.system:
                 self.paused_media = pause_media()
             play_sound(self.config, "start")  # antes do ducking, senão sai baixo demais
@@ -333,8 +340,14 @@ class DictateThread(threading.Thread):
         except OSError:
             pass
 
+        ctx = self._context()
+        names = ctx.names() if ctx else []
+        if names:  # nomes do contexto só neste ditado: o Whisper grafa certo já na transcrição
+            base = self.config.get("initial_prompt", "")
+            self.transcriber.config = dict(self.config, initial_prompt=f"{base.rstrip(' ,.')}, {', '.join(names)}")
         t0 = time.perf_counter()
-        raw_text = self.transcriber.transcribe_file(LAST_WAV, denoise=not self.system)  # RNNoise só piora áudio limpo
+        raw_text = self.transcriber.transcribe_file(LAST_WAV, denoise=not self.system)
+        self.transcriber.config = self.config  # RNNoise só piora áudio limpo
         t1 = time.perf_counter()
         stop = False
         if handsfree and raw_text:
@@ -349,7 +362,8 @@ class DictateThread(threading.Thread):
 
         result = pipeline.process(
             self.config, raw_text, wm_class=self.wm_class, forced_mode=self.mode,
-            on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+            on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"),
+            context=self._ctx_prompt())
         t2 = time.perf_counter()
         _debug_log(f"Tempos: transcrição {(t1 - t0) * 1000:.0f} ms · texto/IA {(t2 - t1) * 1000:.0f} ms "
                    f"({len(all_audio) / sr:.1f}s de áudio)")
@@ -361,7 +375,8 @@ class DictateThread(threading.Thread):
             final_text = " " + final_text  # trechos seguidos não grudam
         _debug_log(f"Texto: {raw_text!r} -> {final_text!r}")
         GLib.idle_add(self.overlay.update_text, final_text.strip(), True)
-        paste_text(final_text, self.active_win, result.config.get("paste_method", "ctrl+v"))
+        paste_text(final_text, self.active_win, result.config.get("paste_method", "ctrl+v"),
+                   after_selection=self._selection_in_field())
         self.pasted = True
         self._remember(raw_text, result)
         if result.ai_error:
@@ -381,9 +396,14 @@ class DictateThread(threading.Thread):
         body = ai.detect_voice_mode(self.config, raw_text)[1] if self.config.get("ai_voice_prefix", True) else raw_text
         picks = queue.Queue()
         selected = result.mode["id"] if result.mode else "original"
+        ctx = self._context()
+        if ctx and hasattr(self.overlay, "set_context"):
+            GLib.idle_add(self.overlay.set_context, ctx.label(), self.use_context)
 
         def offer(res, sel):
             status = "IA falhou · texto original" if res.ai_error else "Enter cola · ⇧Enter envia · Esc descarta"
+            if res.provider and res.provider != "ollama":  # o texto saiu do computador: mostra para onde
+                status = f"via {ai.NAMES.get(res.provider, res.provider)} · {status}"
             GLib.idle_add(self.overlay.update_status, status, "status-error" if res.ai_error else "status-waiting")
             GLib.idle_add(self.overlay.show_choices, res.text, modes, sel, picks.put)
 
@@ -397,8 +417,21 @@ class DictateThread(threading.Thread):
             if action in ("paste", "send", "copy"):
                 ai_text = result.text
                 result.text = self.overlay.get_final_text() or result.text  # com as palavras corrigidas
+            if action == "context":  # liga/desliga o contexto e refaz o modo atual
+                self.use_context = not self.use_context
+                GLib.idle_add(self.overlay.set_context, ctx.label(), self.use_context)
+                if selected in ("raw", "original"):
+                    offer(result, selected)
+                    continue
+                action = selected
+            if action == "raw":  # saída pura do Whisper: sem formatação, dicionário nem IA
+                result = pipeline.Result(text=raw_text, profile=result.profile, config=result.config)
+                selected = "raw"
+                offer(result, selected)
+                continue
             if action in ("paste", "send"):
-                paste_text(result.text, self.active_win, result.config.get("paste_method", "ctrl+v"))
+                paste_text(result.text, self.active_win, result.config.get("paste_method", "ctrl+v"),
+                           after_selection=self._selection_in_field())
                 self.pasted = True
                 done = f"Colado · {result.mode['name']}" if result.mode else "Texto colado"
                 if action == "send":  # só por tecla/clique, nunca por voz
@@ -422,7 +455,8 @@ class DictateThread(threading.Thread):
                 cfg = dict(self.config, ai_voice_prefix=False, ai_enabled=action != "original")
                 result = pipeline.process(
                     cfg, src, wm_class=self.wm_class, forced_mode=None if action == "original" else action,
-                    on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"))
+                    on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"),
+                    context=self._ctx_prompt())
                 selected = action if result.mode or action == "original" else selected
                 offer(result, selected)
                 continue
@@ -430,6 +464,20 @@ class DictateThread(threading.Thread):
             GLib.idle_add(self.overlay.hide_choices)
             GLib.idle_add(self.overlay.update_status, done, "status-error" if action == "discard" else "status-success")
             return
+
+    def _context(self):
+        """Contexto do campo em foco (capturado durante a fala; espera no máximo 0,3 s a mais)."""
+        if self._ctx is None and self._ctx_pending:
+            self._ctx = self._ctx_pending.result(0.3)
+        return self._ctx
+
+    def _ctx_prompt(self):
+        ctx = self._context()
+        return ctx.prompt() if ctx and self.use_context else None
+
+    def _selection_in_field(self):
+        ctx = self._context()
+        return bool(ctx and ctx.in_field and ctx.selection)
 
     def _learn(self, raw_text, result, ai_text):
         """Grava no histórico e transforma as correções marcadas em regra. Devolve o complemento do status."""

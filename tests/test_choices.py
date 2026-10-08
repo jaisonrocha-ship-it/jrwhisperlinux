@@ -14,7 +14,7 @@ from jrwhisper.config import DEFAULT_CONFIG
 
 calls = []
 dictation.GLib.idle_add = lambda f, *a: f(*a)
-dictation.paste_text = lambda text, win, method="ctrl+v": calls.append(("paste", text))
+dictation.paste_text = lambda text, win, method="ctrl+v", **kw: calls.append(("paste", text))
 dictation.copy_text = lambda text: calls.append(("copy", text))
 dictation.press_key = lambda key: calls.append(("key", key))
 
@@ -78,6 +78,12 @@ def test_send_pastes_then_presses_send_key():
     assert not any(c[0] == "key" for c in calls)  # Enter normal nunca envia
 
 
+def test_raw_is_pure_whisper_output():
+    overlay, _ = _session("modo email oi joão vírgula tudo bem", ["raw", "paste"])
+    assert overlay.shown[-1] == ("modo email oi joão vírgula tudo bem", "raw")  # sem formatação nem comandos
+    assert ("paste", "modo email oi joão vírgula tudo bem") in calls
+
+
 def test_edited_word_is_pasted():
     _session("reunião com o marcus amanhã", ["paste"], edit=("marcus", "Marcos"))
     assert ("paste", "Reunião com o Marcos amanhã.") in calls
@@ -125,8 +131,9 @@ def test_overlay_keys_and_scroll():
     ev.key.keyval, ev.key.state = Gdk.KEY_Return, Gdk.ModifierType.SHIFT_MASK
     o.choices_busy = False
     assert o._on_key(o, ev) and picked.pop() == "send"
-    assert key(Gdk.KEY_1) and key(Gdk.KEY_3) and key(Gdk.KEY_KP_2)
-    assert picked == ["paste", "discard", "copy", "original", "ingles", "email"], picked
+    assert key(Gdk.KEY_1) and key(Gdk.KEY_3) and key(Gdk.KEY_KP_2) and key(Gdk.KEY_0)
+    assert picked == ["paste", "discard", "copy", "original", "ingles", "email", "raw"], picked
+    picked.pop()
     key(Gdk.KEY_9)  # só 3 opções: o 9 não escolhe nada
     assert len(picked) == 6
     assert not key(Gdk.KEY_a)  # outras teclas não são engolidas
@@ -172,7 +179,7 @@ def test_hotkey_second_press():
 def run_tests():
     failed = False
     for fn in (test_original_then_paste, test_copy_and_discard_do_not_paste, test_send_pastes_then_presses_send_key,
-               test_edited_word_is_pasted,
+               test_raw_is_pure_whisper_output, test_edited_word_is_pasted,
                test_overlay_word_edit, test_overlay_keys_and_scroll, test_hotkey_second_press):
         try:
             fn()

@@ -79,12 +79,16 @@ DEFAULT_CONFIG = {
     # Inteligência (reescrita com IA). A chave da API fica no keyring, nunca aqui.
     "ai_enabled": False,
     "ai_provider": "nvidia",
+    # Fila do ditado: tenta em ordem, grátis e rápidas primeiro (medido: local 0,26 s; NVIDIA 0,5 s; DeepSeek 0,9 s)
+    "ai_chain": ["ollama", "nvidia", "deepseek"],
     "ai_model": "nvidia/nemotron-3-super-120b-a12b",
     "ai_deepseek_model": "deepseek-flash",
     "ai_ollama_url": "http://localhost:11434",
-    "ai_ollama_model": "llama3.2",
+    "ai_ollama_model": "qwen2.5",
     "ai_default_mode": "",
     "ai_voice_prefix": True,
+    # Contexto do campo em foco (app, janela, rótulo, texto selecionado) para a IA e nomes para o Whisper
+    "context_enabled": True,
     "ai_timeout": 8.0,
     "ai_modes": [
         {"id": "corrigir", "name": "Corrigir", "enabled": True,
