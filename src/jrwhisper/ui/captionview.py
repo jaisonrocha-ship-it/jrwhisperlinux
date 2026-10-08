@@ -43,7 +43,7 @@ class CaptionView:
         self.line_h = self.font_px * 1.45
         self.pad = 12 * scale
         self.accent = accent
-        self.lens = bool(config.get("caption_lens"))
+        self.lens = bool(config.get("caption_lens", True))
         self.zoom = float(config.get("caption_lens_zoom", 1.5)) if self.lens else 1.0
         self.reach = float(config.get("caption_lens_reach", 2)) * self.line_h
         self.focus = LENS_POS.get(config.get("caption_lens_pos", "center"), 0.5)

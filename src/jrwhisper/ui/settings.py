@@ -632,7 +632,7 @@ class SettingsWindow(Gtk.Window):
             for row in lens_rows:
                 row.set_sensitive(on)
         t.switch_row(lb, "Efeito lente", "Linha em foco maior, as de cima e de baixo menores.",
-                     self.config.get("caption_lens"), toggle_lens)
+                     self.config.get("caption_lens", True), toggle_lens)
         lens_rows.append(t.slider_row(lb, "Aumento", "Tamanho da linha em foco.", 1.1, 2.0, 0.1,
                                       self.config.get("caption_lens_zoom", 1.5), lambda v: f"{v:.1f}×".replace(".", ","),
                                       lambda v: apply("caption_lens_zoom", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
@@ -644,7 +644,7 @@ class SettingsWindow(Gtk.Window):
             [("top", "Acima"), ("center", "Centro"), ("bottom", "Abaixo")],
             self.config.get("caption_lens_pos", "center"), lambda v: apply("caption_lens_pos", v))))
         for row in lens_rows:
-            row.set_sensitive(bool(self.config.get("caption_lens")))
+            row.set_sensitive(bool(self.config.get("caption_lens", True)))
 
         lb = t.group(box, "Vocabulário", "Nomes, siglas e jargões que o Whisper deve reconhecer, separados por vírgula.")
         r = Gtk.ListBoxRow()

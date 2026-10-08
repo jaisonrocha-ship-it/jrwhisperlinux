@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "auto_languages": ["pt", "en"],  # "auto" escolhe só entre estes
     "caption_language": "pt",        # legendas ao vivo traduzem para este ("" = idioma original)
     "caption_lines": 8,              # linhas visíveis na legenda (o ditado mostra 3)
-    "caption_lens": False,           # efeito lente: a linha do foco maior, as vizinhas menores
+    "caption_lens": True,            # efeito lente: a linha do foco maior, as vizinhas menores
     "caption_lens_zoom": 1.5,        # aumento da linha do foco
     "caption_lens_reach": 2,         # alcance da lente, em linhas
     "caption_lens_pos": "center",    # foco: top | center | bottom
