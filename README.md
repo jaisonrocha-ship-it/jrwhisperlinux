@@ -32,26 +32,26 @@ JRWhisperLinux captura áudio do microfone, transcreve com um modelo de IA rodan
 
 ## 🚀 Principais Recursos
 
-### 1. Modo Daemon Persistente (Latência 0s)
-O modelo Whisper permanece pré-carregado na GPU em background através de um servidor de socket Unix (`/tmp/dictate_daemon.sock`). Ao ativar o atalho, a captura de voz inicia em **menos de 70ms**, eliminando o delay comum de inicialização de modelos de IA.
+Minimalista por padrão: um atalho, um orbe que reage à sua voz, o texto colado onde o cursor está. Os recursos avançados ficam em **Ajustes** (`dictate -s`), cada um com seu próprio interruptor.
 
-### 2. Interface Deslizante de 3 Linhas (Altura Rígida)
-Para evitar que blocos de texto longos deformem ou redimensionem o modal durante a fala, a interface exibe exatamente as 3 últimas linhas ativas do ditado:
-* **Linha anterior (antiga):** Renderizada com 25% de opacidade para contexto.
-* **Linha do meio:** Renderizada com 60% de opacidade.
-* **Linha atual (ativa):** Renderizada com 95% de opacidade e em itálico dinâmico.
-* *A altura do modal permanece perfeitamente estática, eliminando trepidação visual.*
+### Essencial
+* **Um atalho, dois toques:** o primeiro começa a ouvir; o segundo encerra e transcreve na hora (antes de você falar, cancela). Nada do que foi dito se perde.
+* **Latência zero:** o modelo Whisper fica carregado na GPU por um serviço (`$XDG_RUNTIME_DIR/dictate_daemon.sock`); a captura começa assim que o atalho é pressionado. Trocar o modelo nos Ajustes vale no próximo ditado, sem reiniciar nada.
+* **Comandos de voz:** "vírgula", "ponto final", "nova linha", "novo parágrafo"… mesmo quando o Whisper já pontuou o comando, sai uma pontuação só.
+* **Overlay em três estilos:** Orbe (padrão, esfera de plasma com o mic no centro), Ondas ou Barras de espectro. Cor de destaque, tamanho, posição, brilho e "reduzir movimento" ajustáveis, com pré-visualização ao vivo. Aparece no monitor onde está o mouse e não bloqueia cliques.
+* **Isolamento de voz:** RNNoise limpa música, ventilador e teclado antes da transcrição; o que estiver tocando no computador (navegador, Spotify…) é pausado durante o ditado e retomado depois.
+* **Detecção de fala com histerese:** 150 ms para confirmar que você começou e uma pausa configurável para encerrar.
+* **Calibração por microfone:** medidor ao vivo com espectro; cada mic guarda o próprio limiar. Sem o mic preferido, usa o padrão do sistema e avisa.
 
-### 3. Isolamento de Voz Neural Integrado
-O áudio capturado é processado localmente em frações de segundo por uma rede neural `RNNoise` antes de ir ao Whisper. Música ambiente, barulho de escritório ou digitação mecânica são totalmente ignorados. O processo é agendado com prioridade de CPU reduzida (`nice -n 19`) para não engasgar a máquina.
-
-### 4. Inteligência Multi-Monitor
-O overlay visual do ditado rastreia a posição do mouse e é exibido automaticamente no monitor onde o cursor do usuário está posicionado, ideal para setups profissionais de múltiplas telas.
-
-### 5. VAD de Histerese Inteligente
-O script calibra o threshold de ruído do seu ambiente automaticamente. Ele ignora barulhos curtos (como respirações rápidas ou estalos) usando uma janela de confirmação de fala de **150ms** e encerra o ditado após **1.7s** de silêncio contínuo.
-
----
+### Avançado (Ajustes)
+* **Reescrita com IA:** modos Corrigir, E-mail, Mensagem, Inglês e Tópicos (editáveis). Ative dizendo "modo e-mail, …" no começo, por atalho próprio (`dictate --mode email`) ou por aplicativo. NVIDIA NIM (nuvem) ou Ollama (local). Com a IA ligada, o texto não é colado sozinho: fica na tela, qualquer palavra pode ser corrigida com um clique (Enter confirma, Esc cancela), e há botões para trocar de modo (ou voltar ao original), colar, copiar ou descartar. Pelo teclado: Enter cola, Esc descarta, Ctrl+C copia, 1–9 trocam o modo; o 2º toque no atalho também cola. Texto longo rola com a roda do mouse. No modo mãos livres ele continua colando direto. Se a IA falhar, aparece o texto original.
+* **Perfis por aplicativo:** terminais colam com Ctrl+Shift+V, em minúscula e sem ponto final; chat sem ponto final; e-mail com pontuação completa. Regras editáveis por classe de janela.
+* **Atalhos de texto:** diga "minha assinatura" e o bloco inteiro entra no lugar.
+* **Histórico:** local (0600), com retenção configurável e busca estilo Spotlight (`dictate --history`; Enter cola).
+* **Som do computador:** transcreve o que está tocando (vídeo do YouTube, reunião) direto da saída de áudio, sem passar pelo microfone. Escolha "Som do computador" em Ajustes → Microfone ou use `dictate --system` com atalho próprio; não pausa nas pausas do vídeo, termina no 2º toque ou na duração máxima.
+* **Legendas ao vivo:** `dictate --captions` (ou o atalho em Ajustes → Reconhecimento) legenda o som do computador enquanto toca, traduzido para português, inglês ou espanhol. Inglês sai do próprio Whisper (local); os outros idiomas usam o provedor de IA. A prévia aparece ~0,5–1 s depois da fala e é traduzida enquanto cresce (~1,5–3 s com a NVIDIA; mais rápido com Ollama local); no fim, a legenda inteira fica copiada.
+* **Push-to-talk:** segure o atalho para falar e solte para enviar (X11).
+* **Mãos livres:** depois de colar, volta a ouvir; para com "parar ditado", silêncio longo ou o atalho (que antes transcreve o trecho em andamento).
 
 ## Para quem serve
 
@@ -129,6 +129,14 @@ No painel de controle da sua distribuição (ex: Configurações do Sistema -> T
 * **Comando:** `~/.local/bin/dictate` (ou o caminho onde o script foi instalado)
 * **Atalho:** `Super+Shift+V` (ou o de sua preferência)
 
+### 3. Calibrar o Microfone (opcional)
+
+Abra **Configurações → Áudio & Captação → Calibrar…** (ou `dictate --calibrate-gui`). A janela mostra o nível do mic ao vivo em dBFS, mede 3 s de silêncio e 5 s de fala e salva o limiar **por microfone**. No terminal: `dictate --calibrate`.
+
+* Cada mic guarda a própria calibração. Sem calibração, o ditado mede o ruído a cada uso (automático).
+* Se o mic configurado estiver desconectado, o ditado usa o mic padrão do sistema e avisa no overlay.
+* Yeti GX com `yeti-ctl` (controle HID++ do ganho) em `~/dev/yeti-ctl`: a calibração registra o ganho de hardware; se ele mudar mais de 5 unidades, o ditado volta ao automático até você recalibrar.
+
 ---
 
 ## 📝 Arquivo de Configuração (`config.json`)
@@ -161,7 +169,7 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 
 ### O atalho não abre o overlay
 * Certifique-se de que dependências como `python3-gi` estão instaladas no sistema.
-* Verifique se o daemon está travado ou se o arquivo de lock `/tmp/dictate.pid` ficou órfão.
+* Verifique se o daemon está travado ou se o arquivo de lock `$XDG_RUNTIME_DIR/dictate.pid` ficou órfão.
 
 ### Erro de VRAM / Carregamento CUDA
 * Se você receber erros relativos a `libcublas.so.12` ausente, o script fará fallback automático para CPU. Para usar a GPU, certifique-se de instalar os pacotes CUDA apropriados ou configure caminhos de bibliotecas compatíveis no driver.
@@ -183,6 +191,8 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 | `huggingface-hub` | Apache 2.0 | Download de modelos |
 | `PyAV` | BSD 3-Clause | Binding Python para FFmpeg |
 | `tqdm` | MIT + MPL 2.0 | Barras de progresso |
+| `requests` *(apt)* | Apache 2.0 | Cliente da reescrita por IA |
+| `python-xlib` *(apt)* | LGPL 2.1+ | Push-to-talk (estado do teclado no X11) |
 
 ### Interface (sistema) — Todas LGPL/MPL
 
@@ -191,6 +201,8 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 | PyGObject (GTK3) | LGPL 2.1+ | Overlay visual |
 | Pango | LGPL 2.1 | Renderização de texto |
 | Cairo | LGPL 2.1 / MPL 1.1 | Gráficos vetoriais |
+| Inter (fonte, embarcada) | SIL OFL 1.1 | Tipografia da interface |
+| Lucide (ícones, embutidos) | ISC | Ícones da interface |
 
 ### Sistema (apt) — Ferramentas externas, não bundadas
 
@@ -203,6 +215,7 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 | `ffmpeg` | LGPL/GPL | Processamento de áudio *(externo)* |
 | PulseAudio | LGPL 2.1 | Captura de microfone |
 | PipeWire | LGPL 2.1 | Servidor de áudio moderno |
+| `libsecret-tools` | LGPL 2.1 | Chave de API no chaveiro do sistema |
 
 > ⚠️ xclip, wl-clipboard e ffmpeg têm licenças GPL, mas são **dependências externas de sistema** — o usuário as instala via `apt`, não são bundadas no projeto. O JRWhisperLinux em si (MIT) não herda obrigações de copyleft.
 
@@ -213,6 +226,8 @@ As configurações são salvas em `~/.config/dictate/config.json`. Veja os parâ
 | Whisper (OpenAI) | MIT |
 | RNNoise Models | Domínio Público |
 | Silero VAD | MIT |
+
+> A reescrita por IA é opcional e desligada por padrão. Com a NVIDIA NIM, o texto ditado vai para a API da NVIDIA (serviço externo, sujeito aos termos dela); com o Ollama, tudo fica no computador.
 
 ### Auditoria
 

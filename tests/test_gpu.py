@@ -10,6 +10,8 @@ if sys.executable != VENV_PYTHON and os.path.exists(VENV_PYTHON):
 
 import time, subprocess
 
+LAST_WAV = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "dictate_last.wav")
+
 CUBLAS_SEARCH_PATHS = [
     "/opt/resolve/libs",
     "/usr/local/cuda-12/lib64",
@@ -71,8 +73,8 @@ def test_gpu():
             t1 = time.time()
             print(f"   Model loaded: {t1-t0:.2f}s")
 
-            if os.path.exists('/tmp/dictate_last.wav'):
-                segments, _ = model.transcribe('/tmp/dictate_last.wav', beam_size=3, language='pt', vad_filter=True)
+            if os.path.exists(LAST_WAV):
+                segments, _ = model.transcribe(LAST_WAV, beam_size=3, language='pt', vad_filter=True)
                 text = ' '.join(s.text.strip() for s in segments)
                 t2 = time.time()
                 print(f"   Transcribe: {t2-t1:.2f}s")
@@ -92,8 +94,8 @@ def test_gpu():
         t1 = time.time()
         print(f"   Model loaded: {t1-t0:.2f}s")
 
-        if os.path.exists('/tmp/dictate_last.wav'):
-            segments, _ = model.transcribe('/tmp/dictate_last.wav', beam_size=3, language='pt', vad_filter=True)
+        if os.path.exists(LAST_WAV):
+            segments, _ = model.transcribe(LAST_WAV, beam_size=3, language='pt', vad_filter=True)
             text = ' '.join(s.text.strip() for s in segments)
             t2 = time.time()
             print(f"   Transcribe: {t2-t1:.2f}s")

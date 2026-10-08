@@ -112,7 +112,7 @@ Microphone ──parec──▶ AudioCapture Thread ──buffer──▶ Dictat
 * O processo é priorizado com `nice -n 19` para evitar picos de uso de CPU que causem travamentos no Cinnamon.
 
 ### 4. Transcriber e Daemon Mode
-* **Modo Cliente (Socket Unix)**: O transcritor tenta enviar o arquivo WAV local para o socket Unix `/tmp/dictate_daemon.sock`.
+* **Modo Cliente (Socket Unix)**: O transcritor tenta enviar o arquivo WAV local para o socket Unix `$XDG_RUNTIME_DIR/dictate_daemon.sock` (diretório 0700 por usuário).
 * **Modo Daemon**: Processo persistente rodando como serviço de usuário do systemd (`dictate --daemon`). Ele mantém o modelo Whisper carregado na GPU CUDA (`int8_float16`) reduzindo a latência de load do modelo de 2.2s para 0s.
 * **Greedy Decoding & Zero Context**: As transcrições parciais e finais utilizam `temperature=0.0` (greedy search determinístico) e `condition_on_previous_text=False`. Isso elimina loops de retentativa de temperatura no silêncio (evitando alucinações repetitivas do Whisper) e aumenta a velocidade do modelo na GPU RTX 4060 para ~30ms para trechos curtos.
 

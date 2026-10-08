@@ -25,11 +25,12 @@ product
 - Intrusive icons that float outside of window boundaries or cut off elements (like floating outside the rounded border of the overlay box).
 
 ## Design Principles
-- **Aesthetic Serves Performance:** Latency must be visually hidden or minimized.
-- **Perfect Spacing and Alignment:** Every element must fit within the translucent rounded modal bounds. Nothing overflows or cuts off.
-- **Discrete & Subtle Elements:** Icons, status text, and indicators should not fight for attention; they should support the user's flow state quietly.
+- **Minimal by default, powerful on demand:** one shortcut and an orb. AI rewrite, app profiles, history, snippets, push-to-talk and hands-free live in Settings, each behind its own master switch.
+- **macOS-like:** inset-grouped settings that apply instantly, popup buttons, segmented controls, accent swatches, Spotlight-style history search.
+- **Aesthetic Serves Performance:** latency stays hidden; the overlay is click-through and drawn at 60 fps.
+- **Never lose the dictation:** if the AI fails or is slow, the original text is pasted; if the preferred mic is missing, the system default is used and the overlay says so.
 
 ## Accessibility & Inclusion
 - Clear typography (Inter font family, balanced font weights).
 - High-contrast text on dark translucent backgrounds.
-- Consideration for keyboard accessibility (global shortcut Super+Shift+V triggers and closes the recording cleanly).
+- Keyboard first: the global shortcut starts dictation and a second press finishes and transcribes (never discards speech); the AI review takes Enter / Esc / Ctrl+C / 1–9 while it is open.

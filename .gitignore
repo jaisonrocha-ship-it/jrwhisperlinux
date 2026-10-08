@@ -33,3 +33,4 @@ backups/
 
 # Logs
 *.log
+config/rnnoise-models/
