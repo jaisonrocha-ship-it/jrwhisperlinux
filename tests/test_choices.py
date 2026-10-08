@@ -84,6 +84,70 @@ def test_raw_is_pure_whisper_output():
     assert ("paste", "modo email oi joão vírgula tudo bem") in calls
 
 
+def test_continue_appends_and_redoes_mode():
+    calls.clear()
+    cfg = dict(DEFAULT_CONFIG, ai_enabled=True, history_enabled=False)
+    overlay = FakeOverlay()
+    thread = dictation.DictateThread(overlay, cfg)
+    heard = []
+    thread._continue = lambda shown: heard.append(shown) or "e chego às 3"
+    raw = "confirmo a reserva"
+    t = threading.Thread(target=thread._choose, args=(raw, pipeline.process(dict(cfg, ai_enabled=False), raw)),
+                         daemon=True)
+    t.start()
+    time.sleep(0.3)
+    overlay.pick("continue")
+    time.sleep(0.3)
+    assert heard == ["Confirmo a reserva."]  # a prévia do trecho novo aparece depois do texto revisado
+    assert overlay.shown[-1] == ("Confirmo a reserva e chego às 3.", "original") and thread.stage == "choosing"
+    overlay.pick("raw")
+    time.sleep(0.3)
+    assert overlay.shown[-1][0] == "confirmo a reserva e chego às 3"  # o bruto inclui o trecho novo
+    overlay.pick("paste")
+    t.join(3)
+    assert ("paste", "confirmo a reserva e chego às 3") in calls
+
+
+class FakeCapture:
+    """RMS por tick (50 ms) como o Yeti real: voz picotada perto do limiar."""
+    def __init__(self, rms):
+        self.rms = list(rms)
+
+    def get_rms(self):
+        return self.rms.pop(0) if self.rms else 0.0
+
+    def take_pre_buffer_clear_live(self):
+        return dictation.np.zeros(0, dtype=dictation.np.float32)
+
+    def get_audio_float32(self):
+        return dictation.np.zeros(800, dtype=dictation.np.float32)  # 50 ms a 16 kHz
+
+    def discard_live_buffer(self):
+        pass
+
+
+def test_pause_counts_only_real_silence():
+    """Medido no uso real: com a voz perto do limiar, o silêncio acumulava durante a fala e uma pausa de
+    0,8 s encerrava o ditado configurado para 1,7 s. Agora só a pausa contínua conta."""
+    on, off = 0.01, 0.001
+    speech = [on, on, on] + [on, off, off, on, off, on, off, off] * 6  # ~2,5 s de fala picotada
+    rms = speech + [off] * 16 + [on] * 10 + [off] * 40               # pausa de 0,8 s, mais fala, fim
+    overlay = FakeOverlay()
+    overlay.update_level = lambda *a: None
+    overlay.update_text = lambda *a: None
+    overlay.wants_spectrum = False
+    thread = dictation.DictateThread(overlay, dict(DEFAULT_CONFIG, silence_duration=1.7, max_duration=60))
+    thread.transcriber = None
+    real_thread = threading.Thread  # o mesmo módulo do dictation: guardar antes de trocar
+    dictation.threading.Thread = lambda *a, **k: type("T", (), {"start": lambda self: None})()  # sem prévia
+    try:
+        audio, started, _ = thread._listen(FakeCapture(rms), 0.003, 15)
+    finally:
+        dictation.threading.Thread = real_thread
+    secs = len(audio) / 16000
+    assert started and secs > 4.0, f"encerrou na pausa curta ({secs:.1f}s gravados)"
+
+
 def test_edited_word_is_pasted():
     _session("reunião com o marcus amanhã", ["paste"], edit=("marcus", "Marcos"))
     assert ("paste", "Reunião com o Marcos amanhã.") in calls
@@ -132,8 +196,9 @@ def test_overlay_keys_and_scroll():
     o.choices_busy = False
     assert o._on_key(o, ev) and picked.pop() == "send"
     assert key(Gdk.KEY_1) and key(Gdk.KEY_3) and key(Gdk.KEY_KP_2) and key(Gdk.KEY_0)
-    assert picked == ["paste", "discard", "copy", "original", "ingles", "email", "raw"], picked
-    picked.pop()
+    assert key(Gdk.KEY_space)
+    assert picked == ["paste", "discard", "copy", "original", "ingles", "email", "raw", "continue"], picked
+    del picked[-2:]
     key(Gdk.KEY_9)  # só 3 opções: o 9 não escolhe nada
     assert len(picked) == 6
     assert not key(Gdk.KEY_a)  # outras teclas não são engolidas
@@ -179,7 +244,8 @@ def test_hotkey_second_press():
 def run_tests():
     failed = False
     for fn in (test_original_then_paste, test_copy_and_discard_do_not_paste, test_send_pastes_then_presses_send_key,
-               test_raw_is_pure_whisper_output, test_edited_word_is_pasted,
+               test_raw_is_pure_whisper_output, test_continue_appends_and_redoes_mode,
+               test_pause_counts_only_real_silence, test_edited_word_is_pasted,
                test_overlay_word_edit, test_overlay_keys_and_scroll, test_hotkey_second_press):
         try:
             fn()

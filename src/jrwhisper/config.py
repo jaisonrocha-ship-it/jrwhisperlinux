@@ -31,7 +31,7 @@ DEFAULT_CONFIG = {
     "sample_rate": 16000,
     "mic_device": "@DEFAULT_SOURCE@",
     "silence_threshold": 0,
-    "silence_duration": 1.7,
+    "silence_duration": 2.5,
     "listen_timeout": 15,
     "max_duration": 60,
     "gpu_min_vram_mb": 2500,

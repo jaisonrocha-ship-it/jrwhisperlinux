@@ -665,7 +665,7 @@ class SettingsWindow(Gtk.Window):
 
         lb = t.group(box, "Gravação")
         t.slider_row(lb, "Pausa para encerrar", "Silêncio contínuo que conclui o ditado.", 0.5, 5, 0.1,
-                     self.config.get("silence_duration", 1.7), lambda v: f"{v:.1f} s",
+                     self.config.get("silence_duration", 2.5), lambda v: f"{v:.1f} s",
                      lambda v: self.set("silence_duration", round(v, 1)))
         t.slider_row(lb, "Esperar fala por", "Tempo máximo até você começar a falar.", 5, 60, 1,
                      self.config.get("listen_timeout", 15), lambda v: f"{int(v)} s",

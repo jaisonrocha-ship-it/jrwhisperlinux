@@ -13,8 +13,8 @@ from gi.repository import Gtk, GLib
 
 from .audio import (AudioCapture, calibrate_threshold, calibrated_threshold, friendly_mic_name, get_current_volume,
                     is_system_audio, is_yeti, pause_media, resolve_mic, resume_media, set_volume, yeti_hw_problem)
-from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS,
-                     THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
+from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, RUNTIME_DIR,
+                     SPEECH_START_TICKS, THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text, press_key
 from .profiles import window_class
 from . import ai, context, history, learning, pipeline, ptt, vault
@@ -23,6 +23,8 @@ from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
 from .ui.visuals import spectrum_bands
 
+
+CONTINUE_WAV = os.path.join(RUNTIME_DIR, "dictate_continue.wav")
 
 SOUNDS = {
     "start": "/usr/share/sounds/freedesktop/stereo/audio-volume-change.oga",
@@ -62,11 +64,17 @@ class DictateThread(threading.Thread):
         self._ctx_pending = None  # captura do campo em foco, em paralelo à fala
         self._ctx = None
         self.use_context = True   # o chip "Contexto" da revisão desliga para este ditado
+        self.continuing = False   # "Continuar" da revisão: ouvindo de novo para acrescentar ao texto
+        self.text_prefix = ""     # texto já revisado, mostrado antes da prévia do trecho novo
+        self._session = None      # (mic, taxa, limiar) para voltar a ouvir
+        self._audio = None        # áudio do ditado inteiro (com os trechos do "Continuar")
 
     def hotkey(self):
         """2º toque no atalho (SIGUSR1, roda na thread GTK): nunca descarta o que já foi dito."""
         _debug_log(f"Atalho de novo ({self.stage})")
-        if self.stage == "listening":
+        if self.continuing and self.stage == "waiting":
+            self.finish_now = True  # "Continuar" sem falar nada: volta para a revisão (não fecha o app)
+        elif self.stage == "listening":
             self.finish_now = self.stop_after = True
         elif self.stage == "choosing":
             self.overlay.pick("paste")
@@ -86,6 +94,8 @@ class DictateThread(threading.Thread):
             if text and self.recording_active:
                 if self.config.get("enable_formatting", True):
                     text = format_transcript(text, self.config)
+                if self.text_prefix:  # "Continuar": a prévia aparece depois do texto já revisado
+                    text = f"{self.text_prefix} {text}"
                 GLib.idle_add(self.overlay.update_text, text, False)
         except Exception as e:
             _debug_log(f"Partial transcribe error: {e}")
@@ -274,7 +284,10 @@ class DictateThread(threading.Thread):
                     pre_audio = capture.take_pre_buffer_clear_live()
                     if len(pre_audio) > 0:
                         all_audio = np.concatenate([all_audio, pre_audio])
-                if started and speech_confirm_ticks >= SPEECH_START_TICKS:
+                if started:
+                    # qualquer trecho de voz zera a pausa: com a voz perto do limiar (53–68% dos ticks abaixo,
+                    # medido no Yeti), exigir 150 ms seguidos deixava silêncio acumular durante a fala e uma
+                    # pausa de 0,8 s encerrava o ditado configurado para 1,7 s. Os 150 ms valem só para começar.
                     silence_counter = 0
             else:
                 speech_confirm_ticks = 0
@@ -346,14 +359,9 @@ class DictateThread(threading.Thread):
         except OSError:
             pass
 
-        ctx = self._context()
-        names = ctx.names() if ctx else []
-        if names:  # nomes do contexto só neste ditado: o Whisper grafa certo já na transcrição
-            base = self.config.get("initial_prompt", "")
-            self.transcriber.config = dict(self.config, initial_prompt=f"{base.rstrip(' ,.')}, {', '.join(names)}")
+        self._session, self._audio = (mic, sr, threshold), all_audio
         t0 = time.perf_counter()
-        raw_text = self.transcriber.transcribe_file(LAST_WAV, denoise=not self.system)
-        self.transcriber.config = self.config  # RNNoise só piora áudio limpo
+        raw_text = self._transcribe(LAST_WAV)
         t1 = time.perf_counter()
         stop = False
         if handsfree and raw_text:
@@ -407,7 +415,8 @@ class DictateThread(threading.Thread):
             GLib.idle_add(self.overlay.set_context, ctx.label(), self.use_context)
 
         def offer(res, sel):
-            status = "IA falhou · texto original" if res.ai_error else "Enter cola · ⇧Enter envia · Esc descarta"
+            status = ("IA falhou · texto original" if res.ai_error
+                      else "Enter cola · ⇧Enter envia · Espaço continua · Esc descarta")
             if res.provider and res.provider != "ollama":  # o texto saiu do computador: mostra para onde
                 status = f"via {ai.NAMES.get(res.provider, res.provider)} · {status}"
             GLib.idle_add(self.overlay.update_status, status, "status-error" if res.ai_error else "status-waiting")
@@ -430,6 +439,24 @@ class DictateThread(threading.Thread):
                     offer(result, selected)
                     continue
                 action = selected
+            if action == "continue":  # fala mais; o texto todo é refeito no modo atual
+                shown = self.overlay.get_final_text() or result.text
+                new_raw = self._continue(shown)
+                self.stage = "choosing"
+                if new_raw:
+                    raw_text = f"{raw_text} {new_raw}"
+                    src = f"{shown if self.overlay.edited else body} {new_raw}"
+                    body = f"{body} {new_raw}"
+                    if selected == "raw":
+                        result = pipeline.Result(text=raw_text, profile=result.profile, config=result.config)
+                    else:
+                        cfg = dict(self.config, ai_voice_prefix=False, ai_enabled=selected != "original")
+                        result = pipeline.process(
+                            cfg, src, wm_class=self.wm_class, forced_mode=None if selected == "original" else selected,
+                            on_status=lambda st: GLib.idle_add(self.overlay.update_status, st, "status-transcribing"),
+                            context=self._ctx_prompt())
+                offer(result, selected)
+                continue
             if action == "raw":  # saída pura do Whisper: sem formatação, dicionário nem IA
                 result = pipeline.Result(text=raw_text, profile=result.profile, config=result.config)
                 selected = "raw"
@@ -470,6 +497,46 @@ class DictateThread(threading.Thread):
             GLib.idle_add(self.overlay.hide_choices)
             GLib.idle_add(self.overlay.update_status, done, "status-error" if action == "discard" else "status-success")
             return
+
+    def _transcribe(self, path):
+        """Transcreve com os nomes do contexto no vocabulário só neste ditado (o Whisper grafa certo já)."""
+        ctx = self._context()
+        names = ctx.names() if ctx else []
+        if names:
+            base = self.config.get("initial_prompt", "")
+            self.transcriber.config = dict(self.config, initial_prompt=f"{base.rstrip(' ,.')}, {', '.join(names)}")
+        try:
+            return self.transcriber.transcribe_file(path, denoise=not self.system)  # RNNoise só piora áudio limpo
+        finally:
+            self.transcriber.config = self.config
+
+    def _continue(self, shown):
+        """"Continuar" na revisão: ouve de novo e devolve o texto cru do trecho novo ("" se nada foi dito).
+        O áudio novo entra no do ditado (histórico/treino guardam o ditado inteiro)."""
+        mic, sr, threshold = self._session
+        GLib.idle_add(self.overlay.hide_choices)
+        GLib.idle_add(self.overlay.update_text, shown, False)
+        GLib.idle_add(self.overlay.update_status, "Continue falando · atalho encerra", "status-waiting")
+        self.continuing, self.text_prefix = True, shown
+        capture = AudioCapture(mic, sr)
+        capture.start()
+        try:
+            capture.wait_for_data(timeout=CALIBRATION_WAIT_TIMEOUT)
+            audio, started, _peak = self._listen(capture, threshold, self.config.get("listen_timeout", 15))
+        finally:
+            capture.stop()
+            self.continuing, self.text_prefix = False, ""
+        if not (started and len(audio) > sr * 0.3):
+            return ""
+        GLib.idle_add(self.overlay.update_status, "Transcrevendo...", "status-transcribing")
+        self._audio = np.concatenate([self._audio, np.zeros(int(sr * 0.3), np.float32), audio])
+        for path, data in ((CONTINUE_WAV, audio), (LAST_WAV, self._audio)):
+            with wave.open(path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sr)
+                wf.writeframes((data * 32767).astype(np.int16).tobytes())
+        return self._transcribe(CONTINUE_WAV)
 
     def _context(self):
         """Contexto do campo em foco (capturado durante a fala; espera no máximo 0,3 s a mais)."""

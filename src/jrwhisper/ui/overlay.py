@@ -46,13 +46,13 @@ def _focus_event(window, focus_in):
 
 # rótulos em markup Pango; a tecla vem esmaecida, como o número dos modos
 ACTIONS = (("Colar  <span alpha='55%'>↵</span>", "paste"), ("Colar e enviar  <span alpha='55%'>⇧↵</span>", "send"),
-           ("Copiar", "copy"), ("Descartar", "discard"))
+           ("Continuar  <span alpha='55%'>␣</span>", "continue"), ("Copiar", "copy"), ("Descartar", "discard"))
 
 
 class WhisperFlowOverlay(Gtk.Window):
     MAX_LINES = 3
     CHOICE_LINES = 6   # revisão com IA: mais texto à vista
-    CHIP_ROWS = 5      # espaço reservado: 2 linhas de modos + "contexto" + "lembrar" + ações
+    CHIP_ROWS = 6      # espaço reservado: 2 linhas de modos + "contexto" + "lembrar" + 2 de ações
     MODE_ROWS = 2
 
     def __init__(self, config=None):
@@ -228,6 +228,8 @@ class WhisperFlowOverlay(Gtk.Window):
             self.pick("discard")
         elif ctrl and ch.lower() == "c":
             self.pick("copy")
+        elif ev.keyval == Gdk.KEY_space:
+            self.pick("continue")
         elif not ctrl and ch == "0":
             self.pick("raw")
         elif not ctrl and ch in "123456789":
@@ -521,7 +523,9 @@ class WhisperFlowOverlay(Gtk.Window):
                 row_w += self.chip_gap + it[3]
                 row.append(it)
             rows.append(row)
-        rows.append([chip(label, action, "primary" if action == "paste" else "action") for label, action in ACTIONS])
+        # ações em dois grupos: o que termina/continua o ditado em cima, copiar/descartar embaixo
+        for group in (ACTIONS[:3], ACTIONS[3:]):
+            rows.append([chip(label, action, "primary" if action == "paste" else "action") for label, action in group])
         return rows
 
     def _target_box_h(self):
