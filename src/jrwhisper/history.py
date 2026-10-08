@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 import time
+from datetime import date, timedelta
 
 HISTORY_DIR = os.path.expanduser("~/.local/share/dictate")
 HISTORY_FILE = os.path.join(HISTORY_DIR, "history.jsonl")
@@ -106,9 +107,9 @@ def _rewrite(records, path):
 def when(ts):
     """Rótulo curto estilo macOS: hoje 14:05, ontem 09:12, 03/10 18:40."""
     t = time.localtime(ts)
-    today = time.localtime()
-    if t.tm_yday == today.tm_yday and t.tm_year == today.tm_year:
+    day, today = date.fromtimestamp(ts), date.fromtimestamp(time.time())
+    if day == today:
         return time.strftime("Hoje %H:%M", t)
-    if time.time() - ts < 2 * 86400 and (today.tm_yday - t.tm_yday) % 366 == 1:
+    if day == today - timedelta(days=1):  # data, não tm_yday: 1º/jan após ano de 365 dias errava
         return time.strftime("Ontem %H:%M", t)
     return time.strftime("%d/%m %H:%M", t)

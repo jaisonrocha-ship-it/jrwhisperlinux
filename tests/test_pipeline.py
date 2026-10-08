@@ -127,6 +127,24 @@ def test_strip_reasoning():
         assert ai._strip_reasoning(raw) == want, (raw, ai._strip_reasoning(raw))
 
 
+def test_when():
+    import time as real
+    now = real.mktime((2027, 1, 1, 10, 0, 0, 0, 0, -1))  # 1º de janeiro depois de ano não bissexto
+
+    class Clock:  # só o relógio do history; o módulo time global fica intacto
+        time = staticmethod(lambda: now)
+        localtime = staticmethod(lambda t=None: real.localtime(now if t is None else t))
+        strftime = staticmethod(real.strftime)
+    history.time = Clock
+    try:
+        day = lambda y, m, d, h: real.mktime((y, m, d, h, 0, 0, 0, 0, -1))
+        assert history.when(day(2027, 1, 1, 8)) == "Hoje 08:00"
+        assert history.when(day(2026, 12, 31, 20)) == "Ontem 20:00", history.when(day(2026, 12, 31, 20))
+        assert history.when(day(2026, 12, 30, 20)) == "30/12 20:00"
+    finally:
+        history.time = real
+
+
 def test_history():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "h.jsonl")
@@ -148,7 +166,7 @@ def test_history():
 def run_tests():
     failed = False
     for fn in (test_profiles, test_send_key_per_profile, test_text_rules, test_voice_mode, test_mode_priority,
-               test_ai_pipeline_with_fake_server, test_strip_reasoning, test_history):
+               test_ai_pipeline_with_fake_server, test_strip_reasoning, test_when, test_history):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
