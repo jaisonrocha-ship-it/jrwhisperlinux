@@ -1,0 +1,18 @@
+# Macropad CH57x 1189:8890 (6 teclas + knob). Gravar no dispositivo:
+#   ch57x-keyboard-tool upload < config/macropad.yaml
+# F13–F18 não existem em teclado comum; o knob aperta Ctrl+F13 (F19 não tem keysym no X).
+# Atalhos do Cinnamon: tecla 1 e knob = dictate (2º toque se já ditando), 2 = --mode email,
+# 3 = --system, 4 = --captions, 5 = --history, 6 = --settings.
+model: ch57x-2
+orientation: normal
+rows: 2
+columns: 3
+knobs: 1
+layers:
+  - buttons:
+      - ["f13", "f14", "f15"]
+      - ["f16", "f17", "f18"]
+    knobs:
+      - ccw: "volumedown"
+        press: "ctrl-f13"
+        cw: "volumeup"

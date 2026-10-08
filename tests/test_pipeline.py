@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Perfis, atalhos de texto, modos de IA (servidor HTTP falso, sem rede) e histórico."""
+import json
+import os
+import sys
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from jrwhisper import ai, history, pipeline, secrets
+from jrwhisper.config import DEFAULT_CONFIG
+from jrwhisper.profiles import effective_config, match_profile
+from jrwhisper.textproc import apply_case_rules, apply_snippets
+
+secrets.get_key = lambda provider: "nvapi-teste"
+CFG = {**DEFAULT_CONFIG, "profiles_enabled": True, "ai_enabled": True, "ai_chain": ["nvidia"]}  # só o servidor falso
+
+
+class FakeNIM(BaseHTTPRequestHandler):
+    reply = "Texto reescrito."
+    raw = None
+    status = 200
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeNIM.last = body
+        out = FakeNIM.raw or json.dumps({"choices": [{"message": {"content": FakeNIM.reply}}]}).encode()
+        self.send_response(FakeNIM.status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *a):
+        pass
+
+
+def test_profiles():
+    assert match_profile(CFG, "kitty")["name"] == "Terminais"
+    assert match_profile(CFG, "Guake")["name"] == "Terminais"
+    assert match_profile(CFG, "Code")["name"] == "Editores de código"
+    assert match_profile(CFG, "vscode-insiders") is None      # "code" não casa dentro de outra palavra
+    assert match_profile(CFG, "firefox") is None
+    assert match_profile({**CFG, "profiles_enabled": False}, "kitty") is None
+    eff = effective_config(CFG, match_profile(CFG, "kitty"))
+    assert eff["paste_method"] == "ctrl+shift+v" and eff["final_period"] is False
+
+
+def test_send_key_per_profile():
+    assert effective_config(CFG, match_profile(CFG, "Thunderbird"))["send_key"] == "ctrl+Return"
+    assert effective_config(CFG, match_profile(CFG, "slack"))["send_key"] == "Return"
+    assert "na verdade" in ai.SYSTEM  # correção no meio da fala: a IA mantém só a versão final
+
+
+def test_text_rules():
+    snippets = {"meu e-mail": "jr@example.com", "meu e-mail pessoal": "pessoal@example.com"}
+    assert apply_snippets("Manda para meu e-mail pessoal.", snippets) == "Manda para pessoal@example.com"
+    assert apply_snippets("Meu e-mail, por favor", snippets) == "jr@example.com por favor"
+    term = {"capitalize": False, "final_period": False}
+    assert apply_case_rules("Listar os arquivos.", term) == "listar os arquivos"
+    assert apply_case_rules("API key nova.", term) == "API key nova"   # sigla preservada
+    assert apply_case_rules("Espere...", term) == "espere..."          # reticências ficam
+
+
+def test_voice_mode():
+    for spoken in ("Modo e-mail, preciso remarcar a reunião.", "modo email preciso remarcar a reunião.",
+                   "Modo E mail: preciso remarcar a reunião."):
+        mode, rest = ai.detect_voice_mode(CFG, spoken)
+        assert mode and mode["id"] == "email", spoken
+        assert rest.startswith("Preciso remarcar"), rest
+    mode, rest = ai.detect_voice_mode(CFG, "Modo tópicos, comprar pão e leite")
+    assert mode["id"] == "topicos" and rest == "Comprar pão e leite"
+    assert ai.detect_voice_mode(CFG, "Modo de usar o forno")[0] is None
+
+
+def test_mode_priority():
+    cfg = {**CFG, "ai_default_mode": "corrigir"}
+    assert pipeline.choose_mode(cfg, "texto")[0]["id"] == "corrigir"
+    assert pipeline.choose_mode(cfg, "texto", forced_mode="ingles")[0]["id"] == "ingles"
+    assert pipeline.choose_mode(cfg, "Modo e-mail, oi", forced_mode="ingles")[0]["id"] == "email"
+    assert pipeline.choose_mode({**cfg, "ai_enabled": False}, "Modo e-mail, oi")[0] is None
+
+
+def test_ai_pipeline_with_fake_server():
+    server = HTTPServer(("127.0.0.1", 0), FakeNIM)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    ai.CLOUD["nvidia"] = (f"http://127.0.0.1:{server.server_port}", *ai.CLOUD["nvidia"][1:])  # nunca a NVIDIA real
+    try:
+        FakeNIM.reply = "<think>pensando…</think>Olá João,\n\nPodemos remarcar?\n\nAtenciosamente,"
+        r = pipeline.process(CFG, "Modo e-mail, oi joão podemos remarcar", wm_class="firefox")
+        assert r.mode["id"] == "email" and r.ai_error is None
+        assert r.text.startswith("Olá João") and "<think>" not in r.text
+        assert FakeNIM.last["chat_template_kwargs"] == {"enable_thinking": False}  # nemotron: sem raciocínio
+
+        FakeNIM.status = 500                     # IA fora do ar: cola o original formatado
+        r = pipeline.process(CFG, "Modo e-mail, oi joão", wm_class="firefox")
+        assert r.ai_error and r.text == "Oi joão."
+
+        FakeNIM.status = 200
+        for raw in (b"<html>gateway</html>", b'{"error": "quota"}'):  # 200 com corpo inesperado
+            FakeNIM.raw = raw
+            r = pipeline.process(CFG, "Modo e-mail, oi joão", wm_class="firefox")
+            assert r.ai_error and r.text == "Oi joão."
+    finally:
+        FakeNIM.status, FakeNIM.raw = 200, None
+        server.shutdown()
+
+
+def test_strip_reasoning():
+    cases = {
+        '"Booking confirmado."': "Booking confirmado.",          # resposta inteira entre aspas: tira o par
+        "<think>x</think>Oi.": "Oi.",
+        "Ele disse “sim”": "Ele disse “sim”",                    # aspas do texto ficam
+        "“Sim”, disse ele.": "“Sim”, disse ele.",
+        'Prezado, segue o "BL"': 'Prezado, segue o "BL"',
+        "“Sim”, “não”": "“Sim”, “não”",
+        '"Sim", "não"': '"Sim", "não"',
+        '"Segue o “BL” anexo."': "Segue o “BL” anexo.",            # embrulho com aspas dentro
+        '“Prezado, segue o "booking" confirmado.”': 'Prezado, segue o "booking" confirmado.',
+        '"Segue o "BL" anexo."': 'Segue o "BL" anexo.',           # aspa reta: abre após espaço, fecha após letra
+        '"Texto ok.”': "Texto ok.",                               # aspas mistas
+        '- "a"\n- "b"': '- "a"\n- "b"',
+        '"""': "",                                                # só aspas: vazio → cola o original
+        "<think>pensando sem fim": "",                           # raciocínio cortado: vazio → cola o original
+    }
+    for raw, want in cases.items():
+        assert ai._strip_reasoning(raw) == want, (raw, ai._strip_reasoning(raw))
+
+
+class FakeOllama(BaseHTTPRequestHandler):
+    calls = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeOllama.calls.append((self.path, body))
+        out = {"message": {"content": "Oi."}} if self.path == "/api/chat" else {"done": True}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(out).encode())
+
+    def log_message(self, *a):
+        pass
+
+
+def test_local_ai_stays_loaded_and_warms_up():
+    """Reescrita local pede keep_alive; no início do ditado o modelo é pré-carregado se couber e não estiver."""
+    import time
+    server = HTTPServer(("127.0.0.1", 0), FakeOllama)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    cfg = dict(CFG, ai_provider="ollama", ai_chain=["ollama", "nvidia"], ai_ollama_model="qwen2.5",
+               ai_ollama_url=f"http://127.0.0.1:{server.server_port}")
+    real = ai.check_local
+    try:
+        assert ai.complete(cfg, "Corrija.", "oi") == "Oi."
+        assert FakeOllama.calls[-1][1]["keep_alive"] == ai.OLLAMA_KEEP_ALIVE  # sem isso: descarrega em 5 min
+        for status, warms in (((True, "GPU 50°C, 3000 MB livres"), True),   # cabe e está fora: carrega
+                              ((True, ai.LOADED), False),                   # já carregado: nada a fazer
+                              ((False, "sem VRAM"), False)):                # não cabe: não força a placa
+            FakeOllama.calls.clear()
+            ai.check_local = lambda c, st=status: st
+            ai.prefetch_local(cfg)
+            time.sleep(0.3)
+            gen = [b for path, b in FakeOllama.calls if path == "/api/generate"]
+            assert bool(gen) == warms, (status, FakeOllama.calls)
+            if warms:
+                assert gen[0]["model"] == "qwen2.5" and gen[0]["keep_alive"] == ai.OLLAMA_KEEP_ALIVE
+                assert gen[0]["options"]["num_predict"] == 1  # gera 1 token: aquece a GPU, não só carrega
+    finally:
+        ai.check_local = real
+        server.shutdown()
+
+
+def test_when():
+    import time as real
+    now = real.mktime((2027, 1, 1, 10, 0, 0, 0, 0, -1))  # 1º de janeiro depois de ano não bissexto
+
+    class Clock:  # só o relógio do history; o módulo time global fica intacto
+        time = staticmethod(lambda: now)
+        localtime = staticmethod(lambda t=None: real.localtime(now if t is None else t))
+        strftime = staticmethod(real.strftime)
+    history.time = Clock
+    try:
+        day = lambda y, m, d, h: real.mktime((y, m, d, h, 0, 0, 0, 0, -1))
+        assert history.when(day(2027, 1, 1, 8)) == "Hoje 08:00"
+        assert history.when(day(2026, 12, 31, 20)) == "Ontem 20:00", history.when(day(2026, 12, 31, 20))
+        assert history.when(day(2026, 12, 30, 20)) == "30/12 20:00"
+    finally:
+        history.time = real
+
+
+def test_history():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "h.jsonl")
+        history.add({"text": "primeiro", "raw": "primeiro", "app": "kitty", "mode": ""}, path)
+        history.add({"text": "segundo e-mail", "raw": "x", "app": "firefox", "mode": "E-mail"}, path)
+        assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+        assert [r["text"] for r in history.load(path)] == ["segundo e-mail", "primeiro"]
+        assert [r["text"] for r in history.load(path, query="E-MAIL")] == ["segundo e-mail"]
+        with open(path, "a") as f:
+            f.write("linha quebrada\n")
+        assert len(history.load(path)) == 2
+        old = json.dumps({"ts": 1.0, "text": "antigo"})
+        with open(path, "a") as f:
+            f.write(old + "\n")
+        history.prune(30, path)
+        assert [r["text"] for r in history.load(path)] == ["segundo e-mail", "primeiro"]
+
+
+def run_tests():
+    failed = False
+    for fn in (test_profiles, test_send_key_per_profile, test_text_rules, test_voice_mode, test_mode_priority,
+               test_ai_pipeline_with_fake_server, test_strip_reasoning, test_local_ai_stays_loaded_and_warms_up, test_when, test_history):
+        try:
+            fn()
+            print(f"{fn.__name__}: PASSED")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"{fn.__name__}: FAILED — {e!r}")
+            failed = True
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_tests())
