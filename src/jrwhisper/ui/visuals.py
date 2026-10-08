@@ -14,7 +14,7 @@ SIZE_SCALE = {"s": 0.8, "m": 1.0, "l": 1.25}
 # Superfície de vidro escuro de tudo que o overlay desenha (caixa de texto, legendas, pílula, status):
 # um tom só, opaco o bastante para o texto de trás não atravessar a leitura em fundo claro.
 CARD = (0.09, 0.09, 0.11)
-CARD_ALPHA = 0.95
+CARD_ALPHA = 0.97
 
 # estado → cores (início, fim) quando não seguem o acento
 STATE_COLORS = {
