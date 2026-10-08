@@ -22,6 +22,7 @@ def test_filter():
     assert learning.needs_confirmation("mais", "mas")                     # comum: espera a 2ª
     assert not learning.needs_confirmation("Paulo", "Pablo")
     assert not learning.needs_confirmation("arcelor", "arcelormittal")    # rara: aprende já
+    assert learning.needs_confirmation("API", "APP")                      # sigla por sigla: espera a 2ª
 
 
 def test_apply_rules():
@@ -35,6 +36,9 @@ def test_apply_rules():
     assert cfg["initial_prompt"].count("Pablo") == 1 and "mas" not in cfg["initial_prompt"].split(", ")
     learning.apply(cfg, [("Paulo", "Pablo")])                         # repetir não duplica o vocabulário
     assert cfg["initial_prompt"].count("Pablo") == 1
+    assert learning.apply(cfg, [("API", "APP"), ("API", "APP")]) == ([], ["APP"])  # 2× no mesmo ditado = 1ª vez
+    assert "api" not in cfg["word_overrides"]
+    assert learning.apply(cfg, [("API", "APP")]) == (["APP"], [])     # confirmou em outro ditado
 
 
 def test_learn_rereads_config():

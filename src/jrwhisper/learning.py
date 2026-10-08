@@ -39,7 +39,10 @@ def candidate(old, new):
 
 
 def needs_confirmation(old, new):
-    """Palavra comum em minúscula só vira regra na 2ª correção igual."""
+    """Só vira regra na 2ª correção igual (em outro ditado): palavra comum em minúscula, ou sigla trocada por
+    sigla ("API" → "APP": as duas existem; a regra trocaria toda API dita depois)."""
+    if len(old) >= 2 and old.isupper():
+        return True
     return new == new.lower() and not any(c.isdigit() for c in new) and old.lower() in COMMON
 
 
@@ -55,7 +58,7 @@ def apply(config, pairs):
     overrides = dict(config.get("word_overrides") or {})
     counts = dict(config.get("learn_counts") or {})
     learned, pending = [], []
-    for old, new in pairs:
+    for old, new in dict.fromkeys(pairs):  # repetida no mesmo ditado conta uma vez
         key = f"{old.lower()}→{new}"
         counts[key] = counts.get(key, 0) + 1
         if needs_confirmation(old, new) and counts[key] < 2:
