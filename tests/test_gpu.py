@@ -10,6 +10,12 @@ if sys.executable != VENV_PYTHON and os.path.exists(VENV_PYTHON):
 
 import time, subprocess
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from jrwhisper.config import load_config
+from jrwhisper.transcribe import _preload_cublas
+
+MODEL = load_config()["model"]  # o modelo que você usa (já baixado); fixo em 'medium' baixava 1,5 GB à toa
+
 LAST_WAV = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "dictate_last.wav")
 
 CUBLAS_SEARCH_PATHS = [
@@ -60,16 +66,15 @@ def test_gpu():
     # 4. Test model load + transcribe
     if cublas_path and free_vram >= 2500:
         print(f"\n4. GPU Transcription Test (cublas={cublas_path}):")
-        current = os.environ.get("LD_LIBRARY_PATH", "")
-        if cublas_path not in current:
-            os.environ["LD_LIBRARY_PATH"] = f"{cublas_path}:{current}" if current else cublas_path
+        # LD_LIBRARY_PATH com o processo rodando não vale (o linker não relê): preload, como o app (Regra 3)
+        print(f"   preload: {_preload_cublas()}")
 
         from faster_whisper import WhisperModel
 
         # GPU test
         t0 = time.time()
         try:
-            model = WhisperModel('medium', device='cuda', compute_type='int8_float16')
+            model = WhisperModel(MODEL, device='cuda', compute_type='int8_float16')
             t1 = time.time()
             print(f"   Model loaded: {t1-t0:.2f}s")
 
@@ -90,7 +95,7 @@ def test_gpu():
         # CPU comparison
         print(f"\n5. CPU Comparison:")
         t0 = time.time()
-        model = WhisperModel('medium', device='cpu', compute_type='int8')
+        model = WhisperModel(MODEL, device='cpu', compute_type='int8')
         t1 = time.time()
         print(f"   Model loaded: {t1-t0:.2f}s")
 
