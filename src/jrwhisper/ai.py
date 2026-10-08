@@ -231,7 +231,7 @@ NAMES = {"ollama": "local", "nvidia": "NVIDIA", "deepseek": "DeepSeek"}
 last_provider = None  # quem respondeu a última reescrita (o status mostra quando foi a nuvem)
 
 
-def rewrite(config, text, mode, context=None, style=None):
+def rewrite(config, text, mode, context=None, style=None, terms=None):
     """Texto reescrito pelo modo, tentando a fila de IAs (ai_chain) em ordem; levanta AIError se todas
     falharem (quem chama cola o original). Grátis e rápidas primeiro: local → NVIDIA → DeepSeek."""
     global last_provider
@@ -243,6 +243,8 @@ def rewrite(config, text, mode, context=None, style=None):
         system = f"{SYSTEM} {CONTEXT_RULE}"
     if style:  # e-mail: escreva como o usuário escreve (nota "Meu estilo de escrita" + correções anteriores)
         system = f"{system}\n\nEscreva no estilo do usuário, descrito abaixo. O conteúdo vem só do ditado.\n{style}"
+    if terms:  # léxico: pistas de jargão mal transcrito e traduções certas
+        system = f"{system}\n\n{terms}"
     deadline = time.time() + float(config.get("ai_timeout", 8.0))
     errors = []
     for i, provider in enumerate(chain):

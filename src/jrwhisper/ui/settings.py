@@ -688,9 +688,47 @@ class SettingsWindow(Gtk.Window):
                      self.config.get("learn_corrections", True), lambda v: self.set("learn_corrections", v))
         self._kv_editor(box, "Dicionário", "Corrige grafias recorrentes: o que o Whisper escreve → como deve ficar.",
                         "word_overrides", "escrito", "corrigido")
+        self._lexicon_group(box)
         self._kv_editor(box, "Atalhos de texto", "Diga o gatilho e o texto inteiro entra no lugar. Ex.: “minha assinatura”.",
                         "snippets", "gatilho falado", "texto", multiline=True)
         return root
+
+    def _lexicon_group(self, box):
+        """Léxico de logística: jargão do glossário que você usa → Whisper, pistas e traduções da IA."""
+        from .. import lexicon
+        lb = t.group(box, "Léxico de logística", "Jargão do seu glossário que aparece nos seus e-mails e ditados "
+                                                 "(e nos livros de porto/comex): o Whisper acerta os que você usa, a "
+                                                 "IA corrige palavras parecidas (“demorage” → demurrage) e traduz "
+                                                 "certo no modo Inglês. Risque na nota o que não quiser.")
+        t.switch_row(lb, "Usar o léxico", None, self.config.get("lexicon_enabled", True),
+                     lambda v: self.set("lexicon_enabled", v))
+        lex = lexicon.load(dict(self.config, lexicon_enabled=True))
+        count = (f"{sum(1 for x in lex['terms'] if x[2])} usados por você · {len(lex['terms'])} termos · "
+                 f"{len(lex['pt_en'])} traduções") if lex else "Ainda não criado"
+        open_btn = Gtk.Button(label="Abrir")
+        open_btn.connect("clicked", lambda _b: subprocess.Popen(["xdg-open", self.config["lexicon_note"]])
+                         if os.path.exists(self.config.get("lexicon_note", "")) else None)
+        row = t.row(lb, "Nota", f"{self._short_path(self.config.get('lexicon_note')) or 'Nenhuma'} · {count}", open_btn)
+        rebuild = Gtk.Button(label="Recriar léxico")
+
+        def do_rebuild(btn):
+            btn.set_sensitive(False)
+            row.subtitle.set_text("Lendo glossário, seus textos e livros…")
+
+            def work():
+                t0 = time.time()
+                try:
+                    terms = lexicon.build(self.config)
+                    lexicon.write(self.config, terms)
+                    msg = (f"{self._short_path(self.config['lexicon_note'])} · {len(terms)} termos "
+                           f"({sum(1 for x in terms if x[2])} seus) em {time.time() - t0:.0f} s")
+                except Exception as e:
+                    msg = f"Falhou: {str(e)[:70]}"
+                GLib.idle_add(lambda: (row.subtitle.set_text(msg), btn.set_sensitive(True)) and False)
+            threading.Thread(target=work, daemon=True).start()
+        rebuild.connect("clicked", do_rebuild)
+        t.row(lb, "Recriar a partir das fontes", "Glossário, e-mails do “Meu estilo”, histórico e livros. "
+                                                 "O que você riscou continua fora.", rebuild)
 
     def page_ai(self):
         root, box = t.page("Inteligência", "Reescreve o ditado com um modelo de linguagem antes de colar.")

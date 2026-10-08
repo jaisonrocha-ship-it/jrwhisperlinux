@@ -4,7 +4,7 @@ Atalhos de texto entram depois da formatação e da IA: a expansão sai exatamen
 """
 from dataclasses import dataclass, field
 
-from . import ai, history, style
+from . import ai, history, lexicon, style
 from .config import _debug_log
 from .profiles import effective_config, match_profile
 from .textproc import apply_case_rules, apply_snippets, format_transcript
@@ -66,7 +66,8 @@ def process(config, raw, wm_class=None, forced_mode=None, on_status=None, contex
         if on_status:
             on_status(f"Reescrevendo · {mode['name']}…")
         try:
-            text = ai.rewrite(cfg, text, mode, context=context or None, style=_style(cfg, mode))
+            text = ai.rewrite(cfg, text, mode, context=context or None, style=_style(cfg, mode),
+                              terms=lexicon.ai_guidance(cfg, text, mode))
             provider = ai.last_provider
         except ai.AIError as e:
             error = str(e)

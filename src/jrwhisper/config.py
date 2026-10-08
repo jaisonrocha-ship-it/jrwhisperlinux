@@ -93,6 +93,11 @@ DEFAULT_CONFIG = {
     "style_enabled": True,
     "style_note": "",
     "style_sources": [],             # [{"path", "filter": "sent" | "whole", "subdirs", "enabled"}]
+    # Léxico de logística: jargão do glossário que você usa → Whisper, pistas para a IA, traduções PT↔EN
+    "lexicon_enabled": True,
+    "lexicon_note": "",
+    "lexicon_glossary": "~/glossario-logistica/data.json",
+    "lexicon_books": "",             # pasta de livros em .md (só os de porto/comex/supply chain entram)
     "ai_timeout": 8.0,
     "ai_modes": [
         {"id": "corrigir", "name": "Corrigir", "enabled": True,

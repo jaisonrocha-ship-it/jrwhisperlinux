@@ -10,6 +10,7 @@ USO:
   dictate --captions            → Legendas ao vivo do som do computador, traduzidas; de novo: encerra
   dictate --history             → Busca rápida no histórico (Enter cola)
   dictate --study-style         → Estuda seus e-mails enviados (fontes do estilo) e escreve "Meu estilo de escrita"
+  dictate --build-lexicon       → Recria o "Léxico de logística" (glossário + seus textos + livros de porto/comex)
   dictate --calibrate           → Mede ruído e voz, diagnostica o mic e salva o limiar
   dictate --calibrate-gui       → Mesma calibração em janela, com medidor ao vivo
   dictate --daemon              → Serviço que mantém o modelo carregado
@@ -154,6 +155,17 @@ def main():
             print(f"Falhou: {e}", file=sys.stderr)
             sys.exit(1)
         print(f"Nota: {style.write_note(config['style_note'], block)} ({time.time() - t0:.0f} s)")
+    elif arg == "--build-lexicon":
+        from . import lexicon
+        if not config.get("lexicon_note"):
+            print("Defina a nota em Ajustes → Texto → Léxico.", file=sys.stderr)
+            sys.exit(2)
+        t0 = time.time()
+        terms = lexicon.build(config)
+        path = lexicon.write(config, terms)
+        mine = sum(1 for t in terms if t[2])
+        print(f"{len(terms)} termos ({mine} usados por você) em {time.time() - t0:.1f} s → {path}")
+        print("Mais usados: " + ", ".join(t[0] for t in terms[:25]))
     elif arg == "--daemon":
         run_daemon(config)
     elif arg == "--status":

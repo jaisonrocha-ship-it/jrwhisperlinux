@@ -17,7 +17,7 @@ from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV,
                      SPEECH_START_TICKS, THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
 from .paste import copy_text, paste_text, press_key
 from .profiles import window_class
-from . import ai, context, history, learning, pipeline, ptt, vault
+from . import ai, context, history, learning, lexicon, pipeline, ptt, vault
 from .textproc import format_transcript
 from .transcribe import Transcriber
 from .ui.overlay import WhisperFlowOverlay
@@ -499,12 +499,14 @@ class DictateThread(threading.Thread):
             return
 
     def _transcribe(self, path):
-        """Transcreve com os nomes do contexto no vocabulário só neste ditado (o Whisper grafa certo já)."""
+        """Transcreve com o jargão do léxico e os nomes do contexto no vocabulário só neste ditado.
+        Os nomes vão por último: o faster-whisper corta o começo do prompt quando passa de ~224 tokens."""
         ctx = self._context()
-        names = ctx.names() if ctx else []
-        if names:
-            base = self.config.get("initial_prompt", "")
-            self.transcriber.config = dict(self.config, initial_prompt=f"{base.rstrip(' ,.')}, {', '.join(names)}")
+        base = self.config.get("initial_prompt", "")
+        lex = lexicon.load(self.config)
+        extra = (lexicon.whisper_terms(lex, base) if lex else []) + (ctx.names() if ctx else [])
+        if extra:
+            self.transcriber.config = dict(self.config, initial_prompt=f"{base.rstrip(' ,.')}, {', '.join(extra)}")
         try:
             return self.transcriber.transcribe_file(path, denoise=not self.system)  # RNNoise só piora áudio limpo
         finally:

@@ -20,7 +20,7 @@ from gi.repository import GLib, Gtk
 
 import requests
 
-from . import ai, history, secrets, vault
+from . import ai, history, lexicon, secrets, vault
 from .audio import SYSTEM_AUDIO, AudioCapture
 from .config import RUNTIME_DIR, TICK_INTERVAL, _debug_log
 from .paste import copy_text
@@ -351,6 +351,10 @@ class CaptionThread(threading.Thread):
     def _translate(self, text, prev="", retries=0, lang=None):
         """Tradução, ou None se falhou (a prévia espera a próxima; frase fechada tenta de novo)."""
         context = f"\nFrase anterior, só como contexto (não traduza): {prev}" if prev else ""
+        lex = lexicon.load(self.config)
+        pairs = lexicon.translations(lex, text, self.target) if lex and self.target in ("pt", "en") else []
+        if pairs:  # jargão traduzido certo ("demurrage" → "sobre-estadia")
+            context += "\nTraduza estes termos assim: " + "; ".join(f"{a} → {b}" for a, b in pairs) + "."
         lang_name = LANG_NAMES.get(self.target, self.target)
         for attempt in range(retries + 1):
             while self._budget() <= 0:
