@@ -44,7 +44,9 @@ def _focus_event(window, focus_in):
     return ev
 
 
-ACTIONS = (("Colar", "paste"), ("Copiar", "copy"), ("Descartar", "discard"))
+# rótulos em markup Pango; a tecla vem esmaecida, como o número dos modos
+ACTIONS = (("Colar  <span alpha='55%'>↵</span>", "paste"), ("Colar e enviar  <span alpha='55%'>⇧↵</span>", "send"),
+           ("Copiar", "copy"), ("Descartar", "discard"))
 
 
 class WhisperFlowOverlay(Gtk.Window):
@@ -206,7 +208,7 @@ class WhisperFlowOverlay(Gtk.Window):
         self._finish_edit(True)
         if self.choices and not self.choices_busy:
             self.choices_busy = True  # até a thread responder (reescrever leva ~1-2 s)
-            if action in ("paste", "copy", "discard"):
+            if action in ("paste", "send", "copy", "discard"):
                 # solta o teclado já: o Ctrl+V do xdotool iria para o grab, não para o app
                 self.get_display().get_default_seat().ungrab()
                 self.get_display().flush()
@@ -218,7 +220,7 @@ class WhisperFlowOverlay(Gtk.Window):
         ctrl = ev.state & Gdk.ModifierType.CONTROL_MASK
         ch = chr(Gdk.keyval_to_unicode(ev.keyval) or 0)
         if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-            self.pick("paste")
+            self.pick("send" if ev.state & Gdk.ModifierType.SHIFT_MASK else "paste")
         elif ev.keyval == Gdk.KEY_Escape:
             self.pick("discard")
         elif ctrl and ch.lower() == "c":

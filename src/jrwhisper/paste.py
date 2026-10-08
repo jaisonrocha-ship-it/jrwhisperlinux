@@ -30,6 +30,18 @@ def copy_text(text):
         _debug_log(f"Falha ao copiar: {e}")
 
 
+def press_key(key):
+    """Aperta uma tecla na janela em foco (ex.: "Return", "ctrl+Return" para enviar)."""
+    try:
+        if get_display_server() == "wayland":
+            *mods, k = key.split("+")
+            subprocess.run(["wtype", *[a for m in mods for a in ("-M", m)], "-k", k], timeout=3)
+        else:
+            subprocess.run(["xdotool", "key", "--clearmodifiers", key], timeout=3)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        _debug_log(f"Falha ao apertar {key}: {e}")
+
+
 def paste_text(text, active_win, method="ctrl+v"):
     """Cola na janela ativa. method: ctrl+v | ctrl+shift+v (terminais) | type (digita).
 

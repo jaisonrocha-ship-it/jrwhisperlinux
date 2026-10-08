@@ -15,7 +15,7 @@ from .audio import (AudioCapture, calibrate_threshold, calibrated_threshold, fri
                     is_system_audio, is_yeti, pause_media, resolve_mic, resume_media, set_volume, yeti_hw_problem)
 from .config import (CALIBRATION_WAIT_TIMEOUT, ERROR_LOG, LAST_WAV, PARTIAL_WAV, PID_FILE, SPEECH_START_TICKS,
                      THRESHOLD_FLOOR, TICK_INTERVAL, _debug_log)
-from .paste import copy_text, paste_text
+from .paste import copy_text, paste_text, press_key
 from .profiles import window_class
 from . import ai, history, learning, pipeline, ptt
 from .textproc import format_transcript
@@ -383,7 +383,7 @@ class DictateThread(threading.Thread):
         selected = result.mode["id"] if result.mode else "original"
 
         def offer(res, sel):
-            status = "IA falhou · texto original" if res.ai_error else "Enter cola · Esc descarta · clique para corrigir"
+            status = "IA falhou · texto original" if res.ai_error else "Enter cola · ⇧Enter envia · Esc descarta"
             GLib.idle_add(self.overlay.update_status, status, "status-error" if res.ai_error else "status-waiting")
             GLib.idle_add(self.overlay.show_choices, res.text, modes, sel, picks.put)
 
@@ -394,17 +394,21 @@ class DictateThread(threading.Thread):
                 action = picks.get(timeout=0.2)
             except queue.Empty:
                 continue
-            if action in ("paste", "copy"):
+            if action in ("paste", "send", "copy"):
                 ai_text = result.text
                 result.text = self.overlay.get_final_text() or result.text  # com as palavras corrigidas
-            if action == "paste":
+            if action in ("paste", "send"):
                 paste_text(result.text, self.active_win, result.config.get("paste_method", "ctrl+v"))
                 self.pasted = True
                 done = f"Colado · {result.mode['name']}" if result.mode else "Texto colado"
+                if action == "send":  # só por tecla/clique, nunca por voz
+                    time.sleep(0.15)  # o app termina de colar antes do Enter
+                    press_key(result.config.get("send_key", "Return"))
+                    done = done.replace("Colado", "Enviado").replace("Texto colado", "Enviado")
             elif action == "copy":
                 copy_text(result.text)
                 done = "Copiado"
-            if action in ("paste", "copy"):
+            if action in ("paste", "send", "copy"):
                 done += self._learn(raw_text, result, ai_text)
             elif action == "discard":
                 done = "Descartado"

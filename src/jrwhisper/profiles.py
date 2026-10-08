@@ -33,4 +33,5 @@ def effective_config(config, profile):
             "enable_formatting": profile.get("formatting", True) and config.get("enable_formatting", True),
             "final_period": profile.get("final_period", True),
             "capitalize": profile.get("capitalize", True),
-            "paste_method": profile.get("paste", "ctrl+v")}
+            "paste_method": profile.get("paste", "ctrl+v"),
+            "send_key": profile.get("send_key", "Return")}

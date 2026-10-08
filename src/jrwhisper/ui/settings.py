@@ -28,6 +28,7 @@ from .captionview import CaptionView
 from .visuals import VISUAL_LABELS, make_visual, rounded_rect, spectrum_bands
 
 DICTATE_CMD = os.path.expanduser("~/.local/bin/dictate")
+SEND_KEYS = {"Return": "Enter", "ctrl+Return": "Ctrl+Enter", "shift+Return": "Shift+Enter"}
 
 PAGES = [
     # id, rótulo, ícone, cor do quadradinho
@@ -846,6 +847,8 @@ class SettingsWindow(Gtk.Window):
             bits.append("sem ponto final")
         if p.get("ai_mode"):
             bits.append(f"IA: {p['ai_mode']}")
+        if p.get("send_key", "Return") != "Return":
+            bits.append("envia com " + SEND_KEYS.get(p["send_key"], p["send_key"]))
         return " · ".join(bits)
 
     def _profile_row(self, lb, p):
@@ -882,6 +885,8 @@ class SettingsWindow(Gtk.Window):
                                        ("capitalize", "Maiúscula inicial"))}
             modes = [("", "Nenhum")] + [(m["id"], m["name"]) for m in self.config.get("ai_modes", [])]
             ai = t.choice_row(lb, "Modo de IA", None, modes, p.get("ai_mode", ""), lambda v: None)
+            send = t.choice_row(lb, "Enviar com", "Tecla que “Colar e enviar” (⇧Enter na revisão) aperta.",
+                                list(SEND_KEYS.items()), p.get("send_key", "Return"), lambda v: None)
             if profile is not None:
                 rm = Gtk.Button(label="Remover perfil")
                 rm.get_style_context().add_class("btn-danger")
@@ -896,7 +901,7 @@ class SettingsWindow(Gtk.Window):
                 b.pack_start(rm, False, False, 0)
             return lambda: {**p, "name": fields["name"].get_text().strip() or fields["match"].get_text().strip(),
                             "match": fields["match"].get_text().strip(), "paste": paste.get_active_id(),
-                            "ai_mode": ai.get_active_id() or "",
+                            "ai_mode": ai.get_active_id() or "", "send_key": send.get_active_id() or "Return",
                             **{k: s.get_active() for k, s in switches.items()}}
         res = self._dialog("Perfil de aplicativo", build)
         if not res or not res["match"]:

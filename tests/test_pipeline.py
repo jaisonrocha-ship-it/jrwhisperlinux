@@ -46,6 +46,12 @@ def test_profiles():
     assert eff["paste_method"] == "ctrl+shift+v" and eff["final_period"] is False
 
 
+def test_send_key_per_profile():
+    assert effective_config(CFG, match_profile(CFG, "Thunderbird"))["send_key"] == "ctrl+Return"
+    assert effective_config(CFG, match_profile(CFG, "slack"))["send_key"] == "Return"
+    assert "na verdade" in ai.SYSTEM  # correção no meio da fala: a IA mantém só a versão final
+
+
 def test_text_rules():
     snippets = {"meu e-mail": "jr@example.com", "meu e-mail pessoal": "pessoal@example.com"}
     assert apply_snippets("Manda para meu e-mail pessoal.", snippets) == "Manda para pessoal@example.com"
@@ -120,7 +126,7 @@ def test_history():
 
 def run_tests():
     failed = False
-    for fn in (test_profiles, test_text_rules, test_voice_mode, test_mode_priority,
+    for fn in (test_profiles, test_send_key_per_profile, test_text_rules, test_voice_mode, test_mode_priority,
                test_ai_pipeline_with_fake_server, test_history):
         try:
             fn()

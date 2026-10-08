@@ -117,7 +117,7 @@ DEFAULT_CONFIG = {
          "capitalize": True, "ai_mode": ""},
         {"match": "thunderbird|evolution|geary",
          "name": "E-mail", "paste": "ctrl+v", "formatting": True, "final_period": True,
-         "capitalize": True, "ai_mode": ""},
+         "capitalize": True, "ai_mode": "", "send_key": "ctrl+Return"},
     ],
     # Histórico
     "history_enabled": False,

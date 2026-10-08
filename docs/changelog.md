@@ -5,6 +5,8 @@
 ### Novidades
 * **Aprende com as suas correções:** a palavra corrigida na revisão ganha um selo "Lembrar" (✓ Paulo → Pablo) e um sublinhado; ao colar ou copiar, vira regra do Dicionário, e nome próprio/sigla entra também no vocabulário do Whisper. Clique no selo para não lembrar. Palavra comum ("mais" → "mas") só vira regra na 2ª correção igual; troca de palavra inteira nunca vira regra. Ajustes → Texto → "Aprender com as correções".
 * **Histórico mais completo:** cada ditado guarda também o texto da IA antes das suas correções, as correções feitas e a janela; com "Guardar o áudio" (Ajustes → Histórico, ligado), uma cópia em Opus (~16 MB por hora de fala, comprimida depois de colar) que some junto com a entrada. Base para estilo pessoal, cadastro de voz e treino.
+* **Correção no meio da fala:** com a IA, "chego às 2, não, na verdade às 3" sai "Chego às 3." (também "quer dizer", "aliás", "corrigindo"); um "não" de verdade fica. Medido com qwen2.5 local e DeepSeek: 5/5 casos certos (antes 1–2/5), sem custo de tempo perceptível.
+* **Colar e enviar só por tecla ou clique** (nunca por voz): na revisão, Enter cola e Shift+Enter cola e envia. A tecla de envio é por perfil (Ajustes → Apps → "Enviar com"): Enter por padrão, Ctrl+Enter no perfil E-mail.
 * **Tempos por etapa no log** (transcrição e texto/IA, em ms) para medir o impacto de cada novidade na agilidade.
 
 ## v4.0 — 2026-10-07 (Estável / Atual)

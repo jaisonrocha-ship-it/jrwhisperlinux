@@ -16,6 +16,7 @@ calls = []
 dictation.GLib.idle_add = lambda f, *a: f(*a)
 dictation.paste_text = lambda text, win, method="ctrl+v": calls.append(("paste", text))
 dictation.copy_text = lambda text: calls.append(("copy", text))
+dictation.press_key = lambda key: calls.append(("key", key))
 
 
 class FakeOverlay:
@@ -36,12 +37,12 @@ class FakeOverlay:
         calls.append(("hide",))
 
 
-def _session(raw, picks, edit=None):
+def _session(raw, picks, edit=None, **extra):
     calls.clear()
-    cfg = dict(DEFAULT_CONFIG, ai_enabled=True, history_enabled=False)
+    cfg = dict(DEFAULT_CONFIG, ai_enabled=True, history_enabled=False, **extra)
     overlay = FakeOverlay()
     thread = dictation.DictateThread(overlay, cfg)
-    result = pipeline.process(dict(cfg, ai_enabled=False), raw)
+    result = pipeline.process(dict(cfg, ai_enabled=False), raw, wm_class=extra.get("wm"))
     t = threading.Thread(target=thread._choose, args=(raw, result), daemon=True)
     t.start()
     for action in picks:
@@ -65,6 +66,16 @@ def test_copy_and_discard_do_not_paste():
     assert ("copy", "Teste de cópia.") in calls and not thread.pasted
     _, thread = _session("teste descartado", ["discard"])
     assert not any(c[0] in ("paste", "copy") for c in calls) and not thread.pasted
+
+
+def test_send_pastes_then_presses_send_key():
+    _session("chego às 3", ["send"])
+    assert calls[-4:-2] == [("paste", "Chego às 3."), ("key", "Return")], calls
+    assert ("status", "Enviado") in calls
+    _session("segue o relatório", ["send"], profiles_enabled=True, wm="thunderbird")  # e-mail: Ctrl+Enter
+    assert ("key", "ctrl+Return") in calls
+    _session("só colar", ["paste"])
+    assert not any(c[0] == "key" for c in calls)  # Enter normal nunca envia
 
 
 def test_edited_word_is_pasted():
@@ -110,6 +121,10 @@ def test_overlay_keys_and_scroll():
         o.choices_busy = False
         return o._on_key(o, ev)
     assert key(Gdk.KEY_Return) and key(Gdk.KEY_Escape) and key(Gdk.KEY_c, ctrl=True)
+    ev = Gdk.Event.new(Gdk.EventType.KEY_PRESS)  # Shift+Enter: colar e enviar
+    ev.key.keyval, ev.key.state = Gdk.KEY_Return, Gdk.ModifierType.SHIFT_MASK
+    o.choices_busy = False
+    assert o._on_key(o, ev) and picked.pop() == "send"
     assert key(Gdk.KEY_1) and key(Gdk.KEY_3) and key(Gdk.KEY_KP_2)
     assert picked == ["paste", "discard", "copy", "original", "ingles", "email"], picked
     key(Gdk.KEY_9)  # só 3 opções: o 9 não escolhe nada
@@ -156,7 +171,8 @@ def test_hotkey_second_press():
 
 def run_tests():
     failed = False
-    for fn in (test_original_then_paste, test_copy_and_discard_do_not_paste, test_edited_word_is_pasted,
+    for fn in (test_original_then_paste, test_copy_and_discard_do_not_paste, test_send_pastes_then_presses_send_key,
+               test_edited_word_is_pasted,
                test_overlay_word_edit, test_overlay_keys_and_scroll, test_hotkey_second_press):
         try:
             fn()
