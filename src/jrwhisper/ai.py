@@ -88,8 +88,30 @@ def _no_reasoning(model):
 
 
 def _strip_reasoning(text):
-    # Modelos de raciocínio às vezes devolvem <think>…</think> antes da resposta.
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip().strip('"“”').strip()
+    # Modelos de raciocínio às vezes devolvem <think>…</think> antes da resposta (sem </think> se o
+    # max_tokens cortou: sobra vazio e o ditado cola o original).
+    text = re.sub(r"<think>.*?(?:</think>|$)", "", text, flags=re.S).strip()
+    if not text.strip('"“”'):
+        return ""
+    # Só tira aspas que embrulham a resposta inteira (a de abertura casa com a última);
+    # as do texto ("segue o “BL”", “Sim”, “não”) ficam.
+    if len(text) > 1 and _wrapped(text):
+        text = text[1:-1].strip()
+    return text
+
+
+def _wrapped(text):
+    """A aspa do início só fecha no fim? Aspa reta abre após espaço/início, fecha após o resto:
+    em '"Sim", "não"' a 1ª fecha depois de "Sim"; em '"Segue o "BL" anexo."' embrulha tudo."""
+    depth = 0
+    for i, ch in enumerate(text[:-1]):
+        if ch == "“" or (ch == '"' and (i == 0 or text[i - 1].isspace() or text[i - 1] in "([{")):
+            depth += 1
+        elif ch in '”"':
+            depth -= 1
+        if depth == 0:
+            return False
+    return depth == 1 and text[-1] in '"”'
 
 
 def complete(config, instruction, text, timeout=None, system=SYSTEM, options=None, fmt=None):

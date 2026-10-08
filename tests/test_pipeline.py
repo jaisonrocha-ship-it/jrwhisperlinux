@@ -106,6 +106,27 @@ def test_ai_pipeline_with_fake_server():
         server.shutdown()
 
 
+def test_strip_reasoning():
+    cases = {
+        '"Booking confirmado."': "Booking confirmado.",          # resposta inteira entre aspas: tira o par
+        "<think>x</think>Oi.": "Oi.",
+        "Ele disse “sim”": "Ele disse “sim”",                    # aspas do texto ficam
+        "“Sim”, disse ele.": "“Sim”, disse ele.",
+        'Prezado, segue o "BL"': 'Prezado, segue o "BL"',
+        "“Sim”, “não”": "“Sim”, “não”",
+        '"Sim", "não"': '"Sim", "não"',
+        '"Segue o “BL” anexo."': "Segue o “BL” anexo.",            # embrulho com aspas dentro
+        '“Prezado, segue o "booking" confirmado.”': 'Prezado, segue o "booking" confirmado.',
+        '"Segue o "BL" anexo."': 'Segue o "BL" anexo.',           # aspa reta: abre após espaço, fecha após letra
+        '"Texto ok.”': "Texto ok.",                               # aspas mistas
+        '- "a"\n- "b"': '- "a"\n- "b"',
+        '"""': "",                                                # só aspas: vazio → cola o original
+        "<think>pensando sem fim": "",                           # raciocínio cortado: vazio → cola o original
+    }
+    for raw, want in cases.items():
+        assert ai._strip_reasoning(raw) == want, (raw, ai._strip_reasoning(raw))
+
+
 def test_history():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "h.jsonl")
@@ -127,7 +148,7 @@ def test_history():
 def run_tests():
     failed = False
     for fn in (test_profiles, test_send_key_per_profile, test_text_rules, test_voice_mode, test_mode_priority,
-               test_ai_pipeline_with_fake_server, test_history):
+               test_ai_pipeline_with_fake_server, test_strip_reasoning, test_history):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
