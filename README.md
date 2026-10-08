@@ -97,7 +97,7 @@ Com **Push-to-talk** ligado (X11), segure o atalho de ditado enquanto fala e sol
 
 <p align="center"><img src="assets/macropad/preview.png" width="160" alt="Ícones das 6 teclas do macropad"></p>
 
-Um teclado macro de 6 teclas e 1 knob deixa cada função do ditado a um toque. O modelo usado é um **macropad genérico sem marca, com microcontrolador WCH CH57x** (6 teclas em 2×3 e um knob giratório com clique), vendido com nomes variados como "mini teclado macro 6 teclas 1 knob". Para saber se o seu é compatível, procure o ID `1189:8890` no `lsusb`. Os descritores USB dele vêm vazios e o ID aparece como "Acer" no registro de IDs, mas é só um ID reaproveitado por essas placas, não um produto Acer.
+Um teclado macro de 6 teclas e 1 knob deixa cada função do ditado a um toque. O modelo usado é um **macropad genérico sem marca, com microcontrolador WCH CH57x** (6 teclas em 2×3 e um knob giratório com clique), vendido com nomes variados como "mini teclado macro 6 teclas 1 knob". Exemplo no AliExpress: ["Mini 6-key keyboard" (vendido como GGBEE, preto ou branco)](https://pt.aliexpress.com/item/1005009818579677.html), ou [busque por "macro keyboard 6 key 1 knob"](https://www.aliexpress.com/w/wholesale-macro-keyboard-6-key-1-knob.html). Anúncios com o mesmo formato às vezes trazem outro chip, então confira na chegada: o compatível aparece com o ID `1189:8890` no `lsusb`. Os descritores USB dele vêm vazios e o ID aparece como "Acer" no registro de IDs, mas é só um ID reaproveitado por essas placas, não um produto Acer.
 
 | Tecla | Envia | Comando |
 |---|---|---|
