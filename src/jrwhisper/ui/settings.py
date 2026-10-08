@@ -636,15 +636,11 @@ class SettingsWindow(Gtk.Window):
             apply("caption_lens", on)
             for row in lens_rows:
                 row.set_sensitive(on)
-        t.switch_row(lb, "Efeito lente", "Linha em foco maior, as de cima e de baixo menores.",
+        t.switch_row(lb, "Frase em foco", "A frase mais nova fica maior e parada; as anteriores sobem menores.",
                      self.config.get("caption_lens", True), toggle_lens)
-        lens_rows.append(t.slider_row(lb, "Aumento", "Tamanho da linha em foco.", 1.1, 2.0, 0.1,
+        lens_rows.append(t.slider_row(lb, "Aumento", "Tamanho da frase em foco.", 1.1, 2.0, 0.1,
                                       self.config.get("caption_lens_zoom", 1.5), lambda v: f"{v:.1f}×".replace(".", ","),
                                       lambda v: apply("caption_lens_zoom", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
-        lens_rows.append(t.slider_row(lb, "Alcance", "Quantas linhas em volta do foco também crescem.", 1, 4, 0.5,
-                                      self.config.get("caption_lens_reach", 2),
-                                      lambda v: f"{v:g} linha{'s' if v > 1 else ''}".replace(".", ","),
-                                      lambda v: apply("caption_lens_reach", round(v, 1))).get_ancestor(Gtk.ListBoxRow))
         lens_rows.append(t.row(lb, "Posição do foco", None, t.segmented(
             [("top", "Acima"), ("center", "Centro"), ("bottom", "Abaixo")],
             self.config.get("caption_lens_pos", "center"), lambda v: apply("caption_lens_pos", v))))

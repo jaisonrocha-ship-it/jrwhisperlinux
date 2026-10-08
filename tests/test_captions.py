@@ -157,26 +157,29 @@ def test_pick_hunyuan_or_fall_back():
         captions._ollama_models = real
 
 
-def test_lens_math():
-    from jrwhisper.ui.captionview import MIN_EDGE, lens_edge, lens_map
-    line, side = 21.0, 84.0  # 4 linhas de cada lado do foco
-    for zoom in (1.2, 1.5, 2.0):
-        for reach in (1, 2, 3):
-            r = reach * line
-            e = lens_edge(zoom, r, side)
-            shift0, s0 = lens_map(0, zoom, r, e)
-            assert shift0 == 0 and abs(s0 - zoom) < 1e-9  # o foco tem exatamente o aumento pedido
-            shift, s_edge = lens_map(side, zoom, r, e)
-            if e > MIN_EDGE:  # sem bater no mínimo legível, a borda continua na borda: o cartão não cresce
-                assert abs(shift - side) < 0.5, (zoom, reach, shift)
-            assert MIN_EDGE <= s_edge < zoom
-            sh, _ = lens_map(-side, zoom, r, e)
-            assert abs(sh + shift) < 1e-9  # simétrica
-            prev = -1e9
-            for d in range(0, int(side) + 1, 3):  # a ordem das linhas nunca se inverte
-                cur = lens_map(d, zoom, r, e)[0]
-                assert cur > prev
-                prev = cur
+def test_stable_focus():
+    """Rolando, nenhuma frase muda de tamanho; só na troca de foco, e em ~0,2 s."""
+    import cairo
+    from jrwhisper.ui.captionview import CaptionView
+    v = CaptionView({"caption_lens": True, "caption_lens_zoom": 1.5})
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, 600, 300)
+
+    def step(secs):
+        for _ in range(int(secs * 60)):
+            v.advance(1 / 60)
+            v.draw(cairo.Context(surf), 0, 0, 600, 300)
+
+    v.set_text(["Primeira frase.", "Segunda frase."], "terceira")
+    step(1.0)
+    assert abs(v._anim["Segunda frase."][0] - 1.5) < 0.01 and abs(v._anim["Primeira frase."][0] - 1.0) < 0.01
+    v.set_text(["Primeira frase.", "Segunda frase.", "Terceira frase."], "")
+    step(0.35)  # troca de foco termina rápido
+    assert abs(v._anim["Terceira frase."][0] - 1.5) < 0.02 and abs(v._anim["Segunda frase."][0] - 1.0) < 0.02
+    step(1.5)  # troca assentada
+    sizes = dict((t, st[0]) for t, st in v._anim.items())
+    v.scroll -= 80  # rolagem em andamento (ex.: roda do mouse ou alcançando o alvo)
+    step(0.5)
+    assert all(abs(v._anim[t][0] - sc) < 1e-4 for t, sc in sizes.items())  # tamanho não segue a rolagem
 
 
 def run_tests():
@@ -185,7 +188,7 @@ def run_tests():
                test_continuous_speech_cut_at_quietest_point, test_asr_cut_keeps_epoch_honest,
                test_queued_sentences_go_in_one_call, test_429_retries_instead_of_showing_original,
                test_same_language_skips_ai_and_failure_falls_back, test_cjk_leak_is_stripped,
-               test_hunyuan_uses_official_prompt, test_pick_hunyuan_or_fall_back, test_lens_math):
+               test_hunyuan_uses_official_prompt, test_pick_hunyuan_or_fall_back, test_stable_focus):
         try:
             fn()
             print(f"{fn.__name__}: PASSED")
